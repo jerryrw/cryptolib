@@ -1,0 +1,9 @@
+
+#/* Hash a string (null-terminated) */
+_sha3_256_string
+#/* Hash an entire file */
+_sha3_256_file
+#/* Utility: print hash in hex */
+_sha3_256_print
+#/* High-level: hash a buffer */
+_sha3_256

@@ -1,0 +1,10 @@
+_aes256_init
+_aes256_encrypt_block
+_aes256_decrypt_block
+_aes256_encrypt_buffer
+_aes256_decrypt_buffer
+_aes256_encrypt_file
+_aes256_decrypt_file
+_aes256_secure_zero
+_aes256_cleanup
+_aes256_print_hex
