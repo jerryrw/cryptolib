@@ -2,6 +2,10 @@
 
 ## It includes: AES-256 Encryption, MD5 hash, sha256 hash and sha3256 hash in pure C with no external dependencies. Optimized for macOS ARM (Apple Silicon M series processors).
 
+This is an educational project for myself to learn many things including makefiles and working with MacOS libraries.
+
+The Makefile and directory structure is a bit of a mess at this point. I am combining three seperate projects and I still need to work out the deltas.
+
 ## Features
 
 - ✅ **Pure C Implementation** - No external libraries required
