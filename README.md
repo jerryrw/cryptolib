@@ -1,6 +1,6 @@
-# AES-256 Encryption Implementation
+# A simple cryptographic library for educational use only
 
-A complete, production-quality AES-256 encryption/decryption implementation in pure C with no external dependencies. Optimized for macOS ARM (Apple Silicon M series processors).
+## It includes: AES-256 Encryption, MD5 hash, sha256 hash and sha3256 hash in pure C with no external dependencies. Optimized for macOS ARM (Apple Silicon M series processors).
 
 ## Features
 
@@ -14,18 +14,6 @@ A complete, production-quality AES-256 encryption/decryption implementation in p
 - ✅ **Well Documented** - Extensive inline comments
 - ✅ **Secure** - Implements secure memory clearing
 
-## Project Structure
-
-```
-.
-├── aes256.h          # Header file with API declarations
-├── aes256.c          # Core AES-256 implementation
-├── test_vectors.c    # Comprehensive test suite
-├── examples.c        # Usage examples
-├── Makefile          # Build system
-└── README.md         # This file
-```
-
 ## Building
 
 ### Requirements
@@ -33,180 +21,6 @@ A complete, production-quality AES-256 encryption/decryption implementation in p
 - GCC or Clang compiler
 - macOS (tested on Apple Silicon, but portable to other platforms)
 - Make (optional, but recommended)
-
-### Quick Start
-
-```bash
-# Build everything
-make
-
-# Run tests
-make test
-
-# Run examples
-make run
-
-# Clean build artifacts
-make clean
-```
-
-### Manual Compilation
-
-```bash
-# Compile the library
-gcc -c -O2 aes256.c -o aes256.o
-
-# Build test vectors
-gcc -o test_vectors test_vectors.c aes256.o
-
-# Build examples
-gcc -o examples examples.c aes256.o
-
-# Run
-./test_vectors
-./examples
-```
-
-## API Documentation
-
-### Initialization
-
-```c
-aes256_context ctx;
-uint8_t key[32];  // 256-bit key
-uint8_t iv[16];   // 128-bit initialization vector
-
-// Initialize context
-aes256_init(&ctx, key, iv);
-```
-
-### Memory Buffer Encryption
-
-```c
-const char *message = "Secret message";
-size_t msg_len = strlen(message);
-
-uint8_t encrypted[256];
-uint8_t decrypted[256];
-size_t enc_len, dec_len;
-
-// Encrypt
-aes256_encrypt_buffer(&ctx, (uint8_t*)message, msg_len,
-                      encrypted, &enc_len);
-
-// Decrypt (remember to reset IV if reusing context)
-memcpy(ctx.iv, original_iv, AES_BLOCK_SIZE);
-aes256_decrypt_buffer(&ctx, encrypted, enc_len,
-                      decrypted, &dec_len);
-```
-
-### File Encryption
-
-```c
-// Encrypt file
-aes256_encrypt_file(&ctx, "input.txt", "encrypted.bin");
-
-// Decrypt file
-aes256_decrypt_file(&ctx, "encrypted.bin", "decrypted.txt");
-```
-
-### Security Functions
-
-```c
-// Securely zero out sensitive data
-aes256_secure_zero(&ctx, sizeof(ctx));
-aes256_secure_zero(key, AES_KEY_SIZE);
-
-// Print hex data (for debugging)
-aes256_print_hex("Key", key, AES_KEY_SIZE);
-```
-
-## Usage Examples
-
-### Example 1: Basic Encryption
-
-```c
-#include "aes256.h"
-
-int main(void) {
-    // Key and IV (in production, generate these securely!)
-    uint8_t key[32] = {/* your 256-bit key */};
-    uint8_t iv[16] = {/* your 128-bit IV */};
-
-    // Message
-    const char *msg = "Hello, World!";
-
-    // Buffers
-    uint8_t encrypted[128];
-    uint8_t decrypted[128];
-    size_t enc_len, dec_len;
-
-    // Initialize
-    aes256_context ctx;
-    aes256_init(&ctx, key, iv);
-
-    // Encrypt
-    aes256_encrypt_buffer(&ctx, (uint8_t*)msg, strlen(msg),
-                          encrypted, &enc_len);
-
-    // Decrypt
-    memcpy(ctx.iv, iv, 16);  // Reset IV
-    aes256_decrypt_buffer(&ctx, encrypted, enc_len,
-                          decrypted, &dec_len);
-
-    // Cleanup
-    aes256_secure_zero(&ctx, sizeof(ctx));
-
-    return 0;
-}
-```
-
-### Example 2: File Encryption
-
-```c
-#include "aes256.h"
-
-int main(void) {
-    uint8_t key[32] = {/* your key */};
-    uint8_t iv[16] = {/* your IV */};
-
-    aes256_context ctx;
-    aes256_init(&ctx, key, iv);
-
-    // Encrypt
-    if (aes256_encrypt_file(&ctx, "document.pdf", "document.encrypted")
-        == AES_SUCCESS) {
-        printf("File encrypted successfully!\n");
-    }
-
-    // Decrypt
-    if (aes256_decrypt_file(&ctx, "document.encrypted", "document.decrypted.pdf")
-        == AES_SUCCESS) {
-        printf("File decrypted successfully!\n");
-    }
-
-    aes256_secure_zero(&ctx, sizeof(ctx));
-    return 0;
-}
-```
-
-## Technical Details
-
-### Algorithm Specifications
-
-- **Block Size**: 128 bits (16 bytes)
-- **Key Size**: 256 bits (32 bytes)
-- **Rounds**: 14 (for AES-256)
-- **Mode**: CBC (Cipher Block Chaining)
-- **Padding**: PKCS7
-
-### Implementation Features
-
-1. **Key Expansion**: Generates 60 round keys (240 bytes) from the 256-bit cipher key
-2. **SubBytes**: Uses pre-computed S-boxes for byte substitution
-3. **ShiftRows**: Cyclically shifts rows of the state matrix
-4. **MixColumns**: Performs Galois Field multiplication on state columns
-5. **AddRoundKey**: XORs state with round key
 
 ### Security Considerations
 
@@ -254,19 +68,6 @@ Run tests with:
 make test
 ```
 
-Expected output:
-
-```
-✓ PASS NIST FIPS-197 AES-256 ECB
-✓ PASS ECB Decryption
-✓ PASS All-zeros round-trip
-✓ PASS CBC Buffer round-trip
-✓ PASS Large buffer round-trip
-✓ PASS File round-trip
-...
-✓ All tests passed!
-```
-
 ## Performance
 
 Approximate performance on Apple M2 (varies by system):
@@ -275,12 +76,6 @@ Approximate performance on Apple M2 (varies by system):
 - **Medium buffers** (100KB): ~5 ms
 - **Large buffers** (1MB): ~40-50 ms
 - **Throughput**: ~20-25 MB/s (single-threaded)
-
-Run benchmark:
-
-```bash
-make benchmark
-```
 
 ## Error Codes
 
@@ -323,34 +118,6 @@ AES_ERROR_MEMORY        -5   // Memory allocation failed
    uint8_t *encrypted = malloc(plaintext_len + AES_BLOCK_SIZE);
    ```
 
-## Troubleshooting
-
-### Build Errors
-
-**Problem**: `undefined reference to` errors
-**Solution**: Make sure to link with `aes256.o`:
-
-```bash
-gcc -o myprogram myprogram.c aes256.o
-```
-
-**Problem**: Warning about implicit function declarations
-**Solution**: Include the header: `#include "aes256.h"`
-
-### Runtime Issues
-
-**Problem**: Decrypted data doesn't match original
-**Solution**:
-
-- Ensure you reset the IV before decryption if reusing the context
-- Verify you're using the same key for encryption and decryption
-
-**Problem**: Segmentation fault
-**Solution**:
-
-- Check that output buffers are large enough
-- Ensure pointers are not NULL before passing to functions
-
 ## License
 
 This implementation is provided as-is for educational purposes. Feel free to use, modify, and distribute.
@@ -360,20 +127,5 @@ This implementation is provided as-is for educational purposes. Feel free to use
 - [FIPS-197: AES Specification](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf)
 - [NIST Test Vectors](https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program)
 - [RFC 2315: PKCS #7 (Padding)](https://tools.ietf.org/html/rfc2315)
-
-## Contributing
-
-Contributions are welcome! Please ensure:
-
-- Code follows existing style and formatting
-- All tests pass (`make test`)
-- New features include tests
-- Documentation is updated
-
-## Author
-
-Senior C Developer - AES-256 Implementation for macOS ARM
-
----
 
 **Note**: This is an educational implementation. For production systems, consider using established libraries like OpenSSL, libsodium, or Apple's CommonCrypto framework.
