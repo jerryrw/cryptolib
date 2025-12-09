@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include "include/md5.h"
 
+/* ANSI color codes for output */
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_RED "\x1b[31m"
+#define COLOR_YELLOW "\x1b[33m"
+#define COLOR_RESET "\x1b[0m"
+
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {
     size_t hexlen = strlen(hex);
@@ -44,7 +50,7 @@ static int run_md5_vector(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) != 0)
     {
-        printf("MD5 FAIL: \"%s\"\n", msg);
+        printf(COLOR_RED "✗  MD5 FAIL:" COLOR_RESET "\"%s\"\n", msg);
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -53,7 +59,7 @@ static int run_md5_vector(const char *msg, const char *expected_hex)
     }
     else
     {
-        printf("MD5 PASS: \"%s\"\n", msg);
+        printf(COLOR_GREEN "✓ MD5 PASS:" COLOR_RESET "\"%s\"\n", msg);
         return 0;
     }
 }
@@ -85,12 +91,12 @@ static int run_md5_file_test(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) == 0)
     {
-        printf("MD5 file PASS\n");
+        printf(COLOR_GREEN "✓ MD5 file PASS" COLOR_RESET "\n");
         return 0;
     }
     else
     {
-        printf("MD5 file FAIL\n");
+        printf(COLOR_RED "✗  MD5 file FAIL" COLOR_RESET "\n");
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -101,6 +107,15 @@ static int run_md5_file_test(const char *msg, const char *expected_hex)
 
 int main(void)
 {
+    printf(COLOR_YELLOW "╔════════════════════════════════════════╗\n");
+    printf("║   MD5 Test Vector Suite                ║\n");
+#ifdef __APPLE__
+    printf("║   macOS ARM (Apple Silicon) Build      ║\n");
+#elif __linux__
+    printf("║   Linux Build                          ║\n");
+#endif
+    printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
+
     int fails = 0;
 
     fails += run_md5_vector("", "d41d8cd98f00b204e9800998ecf8427e");
@@ -113,6 +128,7 @@ int main(void)
                             "57edf4a22be3c955ac49da2e2107b67a");
     fails += run_md5_file_test("abc", "900150983cd24fb0d6963f7d28e17f72");
 
-    printf("MD5 tests %s\n", (fails == 0) ? "PASSED" : "FAILED");
+    printf("MD5 tests %s\n", (fails == 0) ? COLOR_GREEN "✓ PASSED" COLOR_RESET : COLOR_RED "✗  FAILED" COLOR_RESET);
+    printf("\n" COLOR_YELLOW "═══════════════════════════════════════\n" COLOR_RESET);
     return (fails == 0) ? 0 : 2;
 }

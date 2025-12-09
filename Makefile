@@ -98,7 +98,7 @@ aes256.o: aes256.c
 	$(CC) $(CFLAGS) -c aes256.c -o aes256.o
 
 clean:
-	rm -f *.o *.so example *.dylib test_nist_md5 test_nist_sha256 test_nist_sha3 test_vectors
+	rm -f *.o *.so example *.dylib test_nist_md5 test_nist_sha256 test_nist_sha3 test_nist_aes256
 
 
 #ifeq ($(OS),Linux)

@@ -4,8 +4,6 @@
  * AES-256 Test Vectors
  * Tests against NIST FIPS-197 test vectors and custom tests
  *
- * Compile: gcc -o test_vectors test_vectors.c aes256.c
- * Run: ./test_vectors
  */
 
 #include "include/aes256.h"
@@ -435,8 +433,14 @@ static void test_padding_edge_cases(void)
 int main(void)
 {
     printf(COLOR_YELLOW "╔════════════════════════════════════════╗\n");
-    printf("║   AES-256 Test Vector Suite          ║\n");
-    printf("║   macOS ARM (Apple Silicon) Build     ║\n");
+    printf("║   AES-256 Test Vector Suite            ║\n");
+
+#ifdef __APPLE__
+    printf("║   macOS ARM (Apple Silicon) Build      ║\n");
+#elif __linux__
+    printf("║   Linux Build                          ║\n");
+#endif
+
     printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
 
     test_nist_ecb_vector();

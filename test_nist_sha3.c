@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include "include/sha3.h"
 
+/* ANSI color codes for output */
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_RED "\x1b[31m"
+#define COLOR_YELLOW "\x1b[33m"
+#define COLOR_RESET "\x1b[0m"
+
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {
     size_t hexlen = strlen(hex);
@@ -42,7 +48,7 @@ static int run_sha3_vector(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) != 0)
     {
-        printf("SHA3-256 FAIL: \"%s\"\n", msg);
+        printf(COLOR_RED "✗  SHA3-256 FAIL:" COLOR_RESET "\"%s\"\n", msg);
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -51,7 +57,7 @@ static int run_sha3_vector(const char *msg, const char *expected_hex)
     }
     else
     {
-        printf("SHA3-256 PASS: \"%s\"\n", msg);
+        printf(COLOR_GREEN "✓ SHA3-256 PASS:" COLOR_RESET "\"%s\"\n", msg);
         return 0;
     }
 }
@@ -83,12 +89,12 @@ static int run_sha3_file_test(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) == 0)
     {
-        printf("SHA3-256 file PASS\n");
+        printf(COLOR_GREEN "✓ SHA3-256 file PASS" COLOR_RESET "\n");
         return 0;
     }
     else
     {
-        printf("SHA3-256 file FAIL\n");
+        printf(COLOR_RED "✗  SHA3-256 file FAIL" COLOR_RESET "\n");
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -99,12 +105,23 @@ static int run_sha3_file_test(const char *msg, const char *expected_hex)
 
 int main(void)
 {
+    printf(COLOR_YELLOW "╔════════════════════════════════════════╗\n");
+    printf("║   SHA3-256 Test Vector Suite           ║\n");
+#ifdef __APPLE__
+    printf("║   macOS ARM (Apple Silicon) Build      ║\n");
+#elif __linux__
+    printf("║   Linux Build                          ║\n");
+#endif
+    printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
+
     int fails = 0;
 
     fails += run_sha3_vector("", "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a");
     fails += run_sha3_vector("abc", "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532");
     fails += run_sha3_file_test("abc", "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532");
 
-    printf("SHA3-256 tests %s\n", (fails == 0) ? "PASSED" : "FAILED");
+    printf("SHA3-256 tests %s\n", (fails == 0) ? COLOR_GREEN "✓ PASSED" COLOR_RESET : COLOR_RED "✗  FAILED" COLOR_RESET);
+    printf("\n" COLOR_YELLOW "═══════════════════════════════════════\n" COLOR_RESET);
+
     return (fails == 0) ? 0 : 2;
 }

@@ -5,6 +5,12 @@
 #include <stdint.h>
 #include "include/sha256.h"
 
+/* ANSI color codes for output */
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_RED "\x1b[31m"
+#define COLOR_YELLOW "\x1b[33m"
+#define COLOR_RESET "\x1b[0m"
+
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {
     size_t hexlen = strlen(hex);
@@ -44,7 +50,7 @@ static int run_sha256_vector(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) != 0)
     {
-        printf("SHA256 FAIL: \"%s\"\n", msg);
+        printf(COLOR_RED "✗  SHA256 FAIL:" COLOR_RESET "\"%s\"\n", msg);
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -53,7 +59,7 @@ static int run_sha256_vector(const char *msg, const char *expected_hex)
     }
     else
     {
-        printf("SHA256 PASS: \"%s\"\n", msg);
+        printf(COLOR_GREEN "✓ SHA256 PASS:" COLOR_RESET "\"%s\"\n", msg);
         return 0;
     }
 }
@@ -85,12 +91,12 @@ static int run_sha256_file_test(const char *msg, const char *expected_hex)
 
     if (memcmp(digest, expected, sizeof(digest)) == 0)
     {
-        printf("SHA256 file PASS\n");
+        printf(COLOR_GREEN "✓ SHA256 file PASS" COLOR_RESET "\n");
         return 0;
     }
     else
     {
-        printf("SHA256 file FAIL\n");
+        printf(COLOR_RED "✗  SHA256 file FAIL" COLOR_RESET "\n");
         printf("  got     : ");
         print_hex(digest, sizeof(digest));
         printf("\n");
@@ -101,6 +107,15 @@ static int run_sha256_file_test(const char *msg, const char *expected_hex)
 
 int main(void)
 {
+    printf(COLOR_YELLOW "╔════════════════════════════════════════╗\n");
+    printf("║   SHA-256 Test Vector Suite            ║\n");
+#ifdef __APPLE__
+    printf("║   macOS ARM (Apple Silicon) Build      ║\n");
+#elif __linux__
+    printf("║   Linux Build                          ║\n");
+#endif
+    printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
+
     int fails = 0;
 
     fails += run_sha256_vector("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
@@ -109,6 +124,7 @@ int main(void)
                                "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
     fails += run_sha256_file_test("abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 
-    printf("SHA256 tests %s\n", (fails == 0) ? "PASSED" : "FAILED");
+    printf("SHA256 tests %s\n", (fails == 0) ? COLOR_GREEN "✓ PASSED" COLOR_RESET : COLOR_RED "✗  FAILED" COLOR_RESET);
+    printf("\n" COLOR_YELLOW "═══════════════════════════════════════\n" COLOR_RESET);
     return (fails == 0) ? 0 : 2;
 }
