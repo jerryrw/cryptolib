@@ -8,7 +8,7 @@
  * Run: ./test_vectors
  */
 
-#include "aes256.h"
+#include "include/aes256.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

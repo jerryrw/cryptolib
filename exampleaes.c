@@ -8,7 +8,7 @@
  * Run: ./examples
  */
 
-#include "aes256.h"
+#include "include/aes256.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

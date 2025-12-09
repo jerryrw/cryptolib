@@ -3,9 +3,9 @@
 // #include <stdlib.h>
 // #include <string.h>
 // #include <stdint.h>
-#include "sha3.h"
-#include "sha256.h"
-#include "md5.h"
+#include "include/sha3.h"
+#include "include/sha256.h"
+#include "include/md5.h"
 
 // typedef uint8_t u8;
 // typedef uint32_t u32;

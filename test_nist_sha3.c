@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "sha3.h"
+#include "include/sha3.h"
 
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {

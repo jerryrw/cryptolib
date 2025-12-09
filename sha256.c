@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "sha256.h"
+#include "include/sha256.h"
 
 // SHA-256 constants
 static const uint32_t K[64] = {

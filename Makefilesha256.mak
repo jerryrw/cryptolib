@@ -41,7 +41,7 @@ run: $(EXAMPLE_EXEC)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(TEST_EXEC) $(EXAMPLE_EXEC)
-	rm -f *.txt *.bin
+	rm -f *.bin
 
 # Install (optional - copies to /usr/local)
 install: $(HEADERS) $(OBJECTS)

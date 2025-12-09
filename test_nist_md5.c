@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "md5.h"
+#include "include/md5.h"
 
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {

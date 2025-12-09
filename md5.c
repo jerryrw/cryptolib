@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "md5.h"
+#include "include/md5.h"
 
 // Bit manipulation macros
 #define F(x, y, z) (((x) & (y)) | ((~x) & (z)))

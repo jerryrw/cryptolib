@@ -13,7 +13,7 @@
  * Public domain / CC0 - use freely
  */
 
-#include "sha3.h"
+#include "include/sha3.h"
 
 /* Keccak-f[1600] round constants */
 static const u64 keccakf_rndc[24] = {
