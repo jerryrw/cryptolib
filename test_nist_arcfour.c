@@ -1,9 +1,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "arcfour.h"
+#include "include/arcfour.h"
 
-#define PASS "✓ PASS"
+/* ANSI color codes for output */
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_RED "\x1b[31m"
+#define COLOR_YELLOW "\x1b[33m"
+#define COLOR_RESET "\x1b[0m"
+
+#define PASS COLOR_GREEN "✓ PASS" COLOR_RESET
 #define FAIL "✗ FAIL"
 
 void print_hex(unsigned char *data, size_t len)
@@ -105,9 +111,19 @@ void test_consistency()
 
 int main()
 {
-    printf("================================\n");
-    printf("RC4 Implementation Validation\n");
-    printf("================================\n\n");
+    // printf("================================\n");
+    // printf("RC4 Implementation Validation\n");
+    // printf("================================\n\n");
+    printf(COLOR_YELLOW "╔════════════════════════════════════════╗\n");
+    printf("║   RC4 Test Vector Suite                ║\n");
+
+#ifdef __APPLE__
+    printf("║   macOS ARM (Apple Silicon) Build      ║\n");
+#elif __linux__
+    printf("║   Linux Build                          ║\n");
+#endif
+
+    printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
 
     test_verified_keystream();
     printf("\n");
@@ -115,12 +131,14 @@ int main()
     printf("\n");
     test_consistency();
 
-    printf("\n================================\n");
-    printf("Your RC4 implementation is working correctly!\n");
-    printf("The keystream values you're producing are consistent\n");
-    printf("and reproducible. The test vectors from earlier may\n");
-    printf("have been incorrect or from a different source.\n");
-    printf("================================\n");
+    // printf("\n================================\n");
+    // printf("Your RC4 implementation is working correctly!\n");
+    // printf("The keystream values you're producing are consistent\n");
+    // printf("and reproducible. The test vectors from earlier may\n");
+    // printf("have been incorrect or from a different source.\n");
+    // printf("================================\n");
+
+    printf("\n" COLOR_YELLOW "═══════════════════════════════════════\n" COLOR_RESET);
 
     return 0;
 }
