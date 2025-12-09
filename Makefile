@@ -4,14 +4,15 @@ OS = $(shell uname -s)
 CC = gcc
 CFLAGS = -std=c11 -Wall -O3 -march=native -mtune=native
 
-all: sha3 sha256 md5 aes256 example test
+all: sha3 sha256 md5 aes256 arcfour example test
 
 # Test programs (NIST-like tests for MD5, SHA256, SHA3, SHA256)
-test: test_nist_md5 test_nist_sha256 test_nist_sha3 test_nist_aes256
+test: test_nist_md5 test_nist_sha256 test_nist_sha3 test_nist_aes256 test_nist_arcfour
 	@./test_nist_md5 || exit 2
 	@./test_nist_sha256 || exit 2
 	@./test_nist_sha3 || exit 2
 	@./test_nist_aes256 || exit 2
+	@./test_nist_arcfour || exit 2
 
 # Build rules for tests
 test_nist_md5: test_nist_md5.o md5
@@ -26,6 +27,12 @@ test_nist_sha3: test_nist_sha3.o sha3
 test_nist_aes256: test_nist_aes256.o aes256
 	$(CC) $(CFLAGS) test_nist_aes256.o -o test_nist_aes256 -L./ -laes256
 
+test_nist_arcfour: test_nist_arcfour.o arcfour
+	$(CC) $(CFLAGS) test_nist_arcfour.o -o test_nist_arcfour -L./ -larcfour
+
+
+test_nist_arcfour.o: test_nist_arcfour.c
+	$(CC) $(CFLAGS) -c test_nist_arcfour.c -o test_nist_arcfour.o
 
 test_nist_md5.o: test_nist_md5.c
 	$(CC) $(CFLAGS) -c test_nist_md5.c -o test_nist_md5.o
@@ -39,14 +46,13 @@ test_nist_sha3.o: test_nist_sha3.c
 test_nist_aes256.o : test_nist_aes256.c
 	$(CC) $(CFLAGS) -c test_nist_aes256.c -o test_nist_aes256.o
 
-example: example.o sha3 sha256 md5 aes256
+example: example.o sha3 sha256 md5 aes256 arcfour
 	$(CC) $(CFLAGS) example.o -o example -L./ -lsha3 -lsha256 -lmd5 -laes256
 
 example.o: example.c
 	$(CC) $(CFLAGS) -c example.c -o example.o
 
 sha3: sha3.o
-
 ifeq ($(OS),Linux)
     # Commands and variables specific to Linux
 	$(CC) -D_GNU_SOURCE sha3.o -o sha3.so -fPIC -shared -ldl
@@ -56,7 +62,6 @@ else ifeq ($(OS),Darwin) # macOS
 endif
 
 sha256: sha256.o
-
 ifeq ($(OS),Linux)
     # Commands and variables specific to Linux
 	$(CC) -D_GNU_SOURCE sha256.o -o sha256.so -fPIC -shared -ldl
@@ -66,7 +71,6 @@ else ifeq ($(OS),Darwin) # macOS
 endif
 
 md5: md5.o
-	
 ifeq ($(OS),Linux)
     # Commands and variables specific to Linux
 	$(CC) -D_GNU_SOURCE md5.o -o md5.so -fPIC -shared -ldl	
@@ -76,13 +80,21 @@ else ifeq ($(OS),Darwin) # macOS
 endif
 
 aes256: aes256.o
-
 ifeq ($(OS),Linux)
     # Commands and variables specific to Linux
 	$(CC) -D_GNU_SOURCE aes256.o -o aes256.so -fPIC -shared -ldl	
 else ifeq ($(OS),Darwin) # macOS
     # Commands and variables specific to macOS
 	$(CC) -dynamiclib -exported_symbols_list symbols/libaes256.exp aes256.o -o libaes256.dylib
+endif
+
+arcfour: arcfour.o
+ifeq ($(OS),Linux)
+    # Commands and variables specific to Linux
+	$(CC) -D_GNU_SOURCE arcfour.o -o arcfour.so -fPIC -shared -ldl	
+else ifeq ($(OS),Darwin) # macOS
+    # Commands and variables specific to macOS
+	$(CC) -dynamiclib -exported_symbols_list symbols/libarcfour.exp arcfour.o -o libarcfour.dylib
 endif
 
 sha3.o: sha3_256.c
@@ -97,8 +109,11 @@ md5.o: md5.c
 aes256.o: aes256.c
 	$(CC) $(CFLAGS) -c aes256.c -o aes256.o
 
+arcfour.o: arcfour.c
+	$(CC) $(CFLAGS) -c arcfour.c -o arcfour.o
+
 clean:
-	rm -f *.o *.so example *.dylib test_nist_md5 test_nist_sha256 test_nist_sha3 test_nist_aes256
+	rm -f *.o *.so example *.dylib test_nist_md5 test_nist_sha256 test_nist_sha3 test_nist_aes256 test_nist_arcfour
 
 
 #ifeq ($(OS),Linux)
