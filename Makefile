@@ -55,7 +55,7 @@ example.o: example.c
 sha3: sha3.o
 ifeq ($(OS),Linux)
     # Commands and variables specific to Linux
-	$(CC) -D_GNU_SOURCE sha3.o -o sha3.so -fPIC -shared -ldl
+	$(CC) -D_GNU_SOURCE sha3.o -o sha3.so -shared -fPIC -ldl
 else ifeq ($(OS),Darwin) # macOS
     # Commands and variables specific to macOS
 	$(CC) -dynamiclib -exported_symbols_list symbols/libsha3.exp sha3.o -o libsha3.dylib 
@@ -98,7 +98,13 @@ else ifeq ($(OS),Darwin) # macOS
 endif
 
 sha3.o: sha3_256.c
+ifeq $(OS),Linux)
+	# Commands and variables specific to Linux
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -c sha3_256.c -o sha3.o -fPIC -ldl  
+else ifeq ($(OS),Darwin) # macOS
+	# Commands and variables specific to macOS
 	$(CC) $(CFLAGS) -c sha3_256.c -o sha3.o 
+endif
 
 sha256.o: sha256.c
 	$(CC) $(CFLAGS) -c sha256.c -o sha256.o

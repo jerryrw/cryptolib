@@ -26,8 +26,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
-#include <Availability.h>
-#include <TargetConditionals.h>
+// #include <Availability.h>
+// #include <TargetConditionals.h>
 #include <sys/random.h>
 #include <stdlib.h>
 #include <time.h>
