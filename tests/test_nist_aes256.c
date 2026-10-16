@@ -1,3 +1,11 @@
+/*
+ * Known-answer and round-trip tests for AES. A known-answer test compares to
+ * published ciphertext; a round-trip tests that decrypt(encrypt(message)) matches
+ * the original. Both matter: matching encryption/decryption mistakes can hide in
+ * a round-trip alone. Helper counters collect failures so main can return a
+ * nonzero exit status. The fixed keys/IVs here are reproducible test fixtures.
+ */
+
 /**
  * test_vectors.c
  *
@@ -6,7 +14,7 @@
  *
  */
 
-#include "include/aes256.h"
+#include "aes256.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -24,6 +32,8 @@ static int tests_failed = 0;
 /**
  * Compare two byte arrays
  */
+/* memcmp returns zero when all len bytes match. This is a test oracle, not
+ * a constant-time secret comparison intended for a network protocol. */
 static int compare_bytes(const uint8_t *a, const uint8_t *b, size_t len)
 {
     return memcmp(a, b, len) == 0;
@@ -50,6 +60,8 @@ static void print_result(const char *test_name, int passed)
  * Test 1: NIST FIPS-197 AES-256 ECB Test Vector
  * Appendix C.3
  */
+/* This fixed key/plaintext/ciphertext triple checks the AES-256 primitive
+ * independently of CBC and padding. All arrays are raw bytes, not C strings. */
 static void test_nist_ecb_vector(void)
 {
     printf("\n=== Test 1: NIST FIPS-197 AES-256 ECB ===\n");
@@ -138,6 +150,9 @@ static void test_all_zeros(void)
 /**
  * Test 3: Buffer encryption/decryption with CBC mode
  */
+/* CBC tests exercise a different layer: padding and chaining multiple blocks.
+ * Resetting ctx.iv in this older test is redundant because buffer calls leave
+ * it unchanged; the explicit IV still documents the initial chaining value. */
 static void test_buffer_cbc(void)
 {
     printf("\n=== Test 3: Buffer CBC Mode ===\n");
@@ -198,6 +213,8 @@ static void test_buffer_cbc(void)
 /**
  * Test 4: Large buffer encryption
  */
+/* Heap buffers are used because this fixture is larger than one AES block.
+ * Check allocation before filling; verify the decrypted length before memcmp. */
 static void test_large_buffer(void)
 {
     printf("\n=== Test 4: Large Buffer (10KB) ===\n");
@@ -271,6 +288,9 @@ static void test_large_buffer(void)
 /**
  * Test 5: File encryption/decryption
  */
+/* This older fixture creates fixed filenames in the working directory.
+ * Use a disposable build checkout; the newer examples and regression fixtures
+ * instead create private temporary directories. Return codes feed test results. */
 static void test_file_operations(void)
 {
     printf("\n=== Test 5: File Encryption/Decryption ===\n");
@@ -372,6 +392,8 @@ static void test_file_operations(void)
 /**
  * Test 6: Padding edge cases
  */
+/* PKCS7 always appends padding. A 16-byte message therefore encrypts to
+ * 32 bytes, while 15 bytes need one padding byte and 1 byte needs fifteen. */
 static void test_padding_edge_cases(void)
 {
     printf("\n=== Test 6: Padding Edge Cases ===\n");

@@ -1,19 +1,35 @@
+/*
+ * MD5 is a legacy 128-bit hash, included for learning. A hash maps bytes to a
+ * fixed-size digest; unlike encryption there is no decrypt operation or secret key.
+ * Follow init -> update (one or more chunks) -> final. The context remembers
+ * partial 64-byte blocks so chunk boundaries do not change the result.
+ * All arithmetic on uint32_t intentionally wraps modulo 2^32.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "include/md5.h"
+#include "md5.h"
 
 // Bit manipulation macros
+/* These are preprocessor macros, expanded as source text before compilation.
+ * &, |, ^ and ~ operate on individual bits (AND, OR, XOR and NOT).
+ * Parentheses prevent an argument expression from changing operator grouping. */
 #define F(x, y, z) (((x) & (y)) | ((~x) & (z)))
 #define G(x, y, z) (((x) & (z)) | ((y) & (~z)))
 #define H(x, y, z) ((x) ^ (y) ^ (z))
 #define I(x, y, z) ((y) ^ ((x) | (~z)))
 
 // Rotate left macro
+/* Rotation differs from shifting: bits leaving the left edge re-enter at
+ * the right. These call sites use counts from 1 to 31, avoiding shifts by 32. */
 #define ROTLEFT(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
 // Transform round macros
+/* Each macro performs one MD5 step: mix the working words with one message
+ * word and a fixed constant, rotate, then add b. The four families differ in
+ * their bitwise mixing rule. Do not pass arguments with side effects to macros. */
 #define FF(a, b, c, d, x, s, ac)              \
     {                                         \
         (a) += F((b), (c), (d)) + (x) + (ac); \
@@ -58,6 +74,8 @@ void md5_update(MD5_CTX *context, const uint8_t *input, size_t input_len)
     size_t i, index, part_len;
 
     // Compute number of bytes mod 64
+/* count stores bits. Shifting right by 3 converts to bytes; masking with
+ * 0x3F keeps the low six bits, equivalent to byte_count modulo 64. */
     index = (size_t)((context->count >> 3) & 0x3F);
 
     // Update number of bits
@@ -71,6 +89,8 @@ void md5_update(MD5_CTX *context, const uint8_t *input, size_t input_len)
         memcpy(&context->buffer[index], input, part_len);
         md5_transform(context, context->buffer);
 
+/* After completing the buffered block, process whole blocks directly from
+ * the caller input. &input[i] is the address of element i, not its byte value. */
         for (i = part_len; i + 63 < input_len; i += 64)
             md5_transform(context, &input[i]);
 
@@ -93,6 +113,8 @@ void md5_final(MD5_CTX *context, uint8_t digest[16])
     uint64_t count;
 
     // Save number of bits
+/* Remember the original message length: adding padding with md5_update
+ * will also change the context counter, but the encoded length must exclude it. */
     count = context->count;
 
     // Convert to bytes
@@ -107,9 +129,13 @@ void md5_final(MD5_CTX *context, uint8_t digest[16])
 
     // Compute index of buffer
     index = (size_t)((context->count >> 3) & 0x3F);
+/* Reserve 8 bytes for the original bit length. If there is not enough room
+ * in this 64-byte block, pad into a second block (120 = 2*64 - 8). */
     pad_len = (index < 56) ? (56 - index) : (120 - index);
 
     // Padding
+/* 0x80 is binary 10000000: the first padding bit is 1, then zeros.
+ * An array initializer with one value automatically zero-initializes the rest. */
     uint8_t padding[64] = {0x80};
     if (pad_len > 1)
         memset(padding + 1, 0, pad_len - 1);
@@ -138,6 +164,9 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
     uint32_t x[16];
 
     // Convert block to little-endian 32-bit words
+/* MD5 reads little-endian words: the first byte is least significant.
+ * Cast before shifting so byte promotion to signed int cannot overflow.
+ * Explicit byte assembly avoids depending on the machine native byte order. */
     for (int i = 0; i < 16; i++)
     {
         x[i] = ((uint32_t)block[i * 4]) |
@@ -146,7 +175,7 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
                (((uint32_t)block[i * 4 + 3]) << 24);
     }
 
-    // Round 1
+    // Round 1: choose bits using b; constants and message order are fixed by MD5.
     FF(a, b, c, d, x[0], 7, 0xd76aa478);
     FF(d, a, b, c, x[1], 12, 0xe8c7b756);
     FF(c, d, a, b, x[2], 17, 0x242070db);
@@ -164,7 +193,7 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
     FF(c, d, a, b, x[14], 17, 0xa679438e);
     FF(b, c, d, a, x[15], 22, 0x49b40821);
 
-    // Round 2
+    // Round 2: a different mixing rule and message-word order spread changes.
     GG(a, b, c, d, x[1], 5, 0xf61e2562);
     GG(d, a, b, c, x[6], 9, 0xc040b340);
     GG(c, d, a, b, x[11], 14, 0x265e5a51);
@@ -182,7 +211,7 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
     GG(c, d, a, b, x[7], 14, 0x676f02d9);
     GG(b, c, d, a, x[12], 20, 0x8d2a4c8a);
 
-    // Round 3
+    // Round 3: use XOR mixing. These 16 steps are written out for clarity.
     HH(a, b, c, d, x[5], 4, 0xfffa3942);
     HH(d, a, b, c, x[8], 11, 0x8771f681);
     HH(c, d, a, b, x[11], 16, 0x6d9d6122);
@@ -200,7 +229,7 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
     HH(c, d, a, b, x[15], 16, 0x1fa27cf8);
     HH(b, c, d, a, x[2], 23, 0xc4ac5665);
 
-    // Round 4
+    // Round 4: the last 16 steps complete the 64-step compression.
     II(a, b, c, d, x[0], 6, 0xf4292244);
     II(d, a, b, c, x[7], 10, 0x432aff97);
     II(c, d, a, b, x[14], 15, 0xab9423a7);
@@ -219,6 +248,8 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
     II(b, c, d, a, x[9], 21, 0xeb86d391);
 
     // Update state
+/* Feed the working words back into the saved state, linking this block
+ * to all previous blocks. This is why update must use the same context. */
     context->state[0] += a;
     context->state[1] += b;
     context->state[2] += c;
@@ -226,6 +257,10 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
 }
 
 // Calculate MD5 hash of a file
+/* Open in binary mode and read bounded chunks rather than loading the
+ * whole file. fread returning zero can mean EOF or an error; ferror tells them
+ * apart. The caller supplies at least 16 output bytes. No heap ownership is
+ * transferred. This routine prints I/O diagnostics and returns -1 on failure. */
 int md5_file(const char *filepath, uint8_t *hash)
 {
     FILE *file;
@@ -267,20 +302,4 @@ int md5_file(const char *filepath, uint8_t *hash)
     return 0;
 }
 
-// int main()
-// {
-//     const char *filepath = "example.txt";
-//     uint8_t hash[16]; // 128 bits = 16 bytes
-
-//     if (calculate_file_md5(filepath, hash) == 0)
-//     {
-//         printf("MD5 Hash: ");
-//         for (int i = 0; i < 16; ++i)
-//         {
-//             printf("%02x", hash[i]);
-//         }
-//         printf("\n");
-//     }
-
-//     return 0;
-// }
+/* See src/example.c for a complete, built example using this API. */

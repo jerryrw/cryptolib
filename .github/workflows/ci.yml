@@ -1,0 +1,25 @@
+# GitHub Actions runs these commands in clean hosted checkouts.
+# Each matrix entry creates an independent job; a failure on one OS should
+# not cancel the other OS, hence fail-fast: false. No write token is needed.
+name: Build and test
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Checkout makes the repository sources available to subsequent commands.
+      - uses: actions/checkout@v4
+      - name: Build, test, and run examples
+        run: make -j2 check CC=clang
+      - name: Address and undefined behavior sanitizers
+        run: make sanitize CC=clang
+      # Linux Clang supplies libFuzzer; the macOS job still runs ASan/UBSan.
+      - name: Fuzzer smoke test
+        if: runner.os == 'Linux'
+        run: make fuzz-smoke FUZZ_CC=clang

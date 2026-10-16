@@ -1,4 +1,11 @@
 /*
+ * SHA3 uses a sponge: XOR input into part of a 200-byte state, permute that
+ * state, then extract digest bytes. SHA3-256 accepts 136 bytes per absorb block
+ * (the rate), while 64 bytes remain as the capacity. The state is represented
+ * as 25 unsigned 64-bit lanes. Its indexing and byte order are explicit below.
+ */
+
+/*
  * SHA-3-256 (FIPS 202) - Pure C implementation
  * No external libraries, no dependencies
  * Works on any architecture (including Apple Silicon M1/M2/M3/M4)
@@ -8,12 +15,12 @@
  * - Hash strings / memory buffers
  * - Hash entire files efficiently
  * - Thoroughly commented
- * - Constant-time where required
+ * - Explicit byte-order handling for lane input/output
  *
  * Public domain / CC0 - use freely
  */
 
-#include "include/sha3.h"
+#include "sha3.h"
 
 /* Keccak-f[1600] round constants */
 static const u64 keccakf_rndc[24] = {
@@ -41,6 +48,9 @@ static const int keccakf_piln[24] = {
     15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1};
 
 /* Keccak-f[1600] permutation */
+/* Permutation means a reversible rearrangement/mixing of the entire state.
+ * The five named steps below repeat for 24 rounds. state[x + 5*y] is lane
+ * (x,y) in a 5-by-5 grid; each lane contains 64 bits. */
 static void keccakf(u64 state[25])
 {
     int round, i, j;
@@ -49,7 +59,8 @@ static void keccakf(u64 state[25])
     for (round = 0; round < 24; round++)
     {
 
-        /* Theta step */
+        /* Theta: compute each column parity, then mix neighboring parities
+         * into every lane. bc is temporary storage so old values stay available. */
         for (i = 0; i < 5; i++)
             bc[i] = state[i] ^ state[i + 5] ^ state[i + 10] ^ state[i + 15] ^ state[i + 20];
 
@@ -60,7 +71,8 @@ static void keccakf(u64 state[25])
                 state[j + i] ^= t;
         }
 
-        /* Rho and Pi steps */
+        /* Rho rotates the bits within lanes; Pi moves lanes to new positions.
+         * t carries the displaced lane around the fixed permutation cycle. */
         t = state[1];
         for (i = 0; i < 24; i++)
         {
@@ -70,7 +82,8 @@ static void keccakf(u64 state[25])
             t = bc[0];
         }
 
-        /* Chi step */
+        /* Chi is a nonlinear row operation. Copy the row to bc first, since
+         * later assignments need the original neighboring lane values. */
         for (j = 0; j < 25; j += 5)
         {
             for (i = 0; i < 5; i++)
@@ -79,7 +92,7 @@ static void keccakf(u64 state[25])
                 state[j + i] ^= (~bc[(i + 1) % 5]) & bc[(i + 2) % 5];
         }
 
-        /* Iota step */
+        /* Iota XORs a different round constant into lane 0. */
         state[0] ^= keccakf_rndc[round];
     }
 }
@@ -97,12 +110,17 @@ typedef struct
 /* Initialize SHA-3-256 context */
 void sha3_256_init(sha3_256_ctx *ctx)
 {
+/* sizeof(*ctx) is the size of the entire struct, not the size of its pointer.
+ * memset fills those bytes with zero; the state and buffer both start empty. */
     memset(ctx, 0, sizeof(*ctx));
     ctx->rate = SHA3_256_BLOCK_SIZE; // 136 bytes
     ctx->hash_len = SHA3_256_HASH_SIZE;
 }
 
 /* Absorb data into the sponge */
+/* take is the smaller of remaining input and unused block space. Pointer
+ * arithmetic moves data forward by bytes because u8 is an 8-bit element type.
+ * Retain an incomplete block across calls; permute only when it is full. */
 static void sha3_absorb(sha3_256_ctx *ctx, const u8 *data, size_t len)
 {
     while (len > 0)
@@ -121,16 +139,24 @@ static void sha3_absorb(sha3_256_ctx *ctx, const u8 *data, size_t len)
         if (ctx->buf_len == ctx->rate)
         {
             /* Full block: permute */
-            u64 *state64 = (u64 *)ctx->buffer;
+/* Load 17 lanes (136 / 8) little-endian: byte j contributes at bit 8*j.
+ * The cast to u64 happens before shifting, so shifts up to 56 bits are valid. */
             for (int i = 0; i < 17; i++) // 136/8 = 17
-                ctx->state[i] ^= state64[i];
+                for (int j = 0; j < 8; j++)
+                    ctx->state[i] ^= (u64)ctx->buffer[i * 8 + j] << (8 * j);
             keccakf(ctx->state);
+/* The next block must start empty. Leaving old bytes here would XOR
+ * the preceding message block into the next one and corrupt the digest. */
+            memset(ctx->buffer, 0, ctx->rate);
             ctx->buf_len = 0;
         }
     }
 }
 
 /* Final padding and squeeze */
+/* 0x06 contains the SHA3 domain-separation bits plus the first padding bit;
+ * 0x80 adds the final padding bit. XOR handles both markers in one byte when
+ * only one byte of rate space remains. These are SHA3 padding, not AES PKCS7. */
 static void sha3_final(sha3_256_ctx *ctx, u8 *out)
 {
     /* SHA-3 padding: "01" + zeros + "1" in the domain of 01 for SHA-3 */
@@ -138,16 +164,22 @@ static void sha3_final(sha3_256_ctx *ctx, u8 *out)
     ctx->buffer[ctx->rate - 1] ^= 0x80;  // Append 1 at the end
 
     /* Absorb final block */
-    u64 *state64 = (u64 *)ctx->buffer;
     for (int i = 0; i < 17; i++)
-        ctx->state[i] ^= state64[i];
+        for (int j = 0; j < 8; j++)
+            ctx->state[i] ^= (u64)ctx->buffer[i * 8 + j] << (8 * j);
     keccakf(ctx->state);
 
     /* Squeeze out 32 bytes */
-    memcpy(out, ctx->state, 32);
+/* Extract 32 bytes in little-endian lane order. i / 8 chooses the lane;
+ * i % 8 chooses its byte. This works independently of CPU byte order. */
+    for (size_t i = 0; i < 32; i++)
+        out[i] = (u8)(ctx->state[i / 8] >> (8 * (i % 8)));
 }
 
 /* High-level: hash a buffer */
+/* A one-shot convenience API: the context lives in this call, so the caller
+ * only supplies input bytes and at least 32 writable output bytes. No allocation
+ * or ownership transfer occurs. Lengths describe binary data, not C strings. */
 void sha3_256(const u8 *input, size_t len, u8 hash[32])
 {
     sha3_256_ctx ctx;
@@ -157,12 +189,17 @@ void sha3_256(const u8 *input, size_t len, u8 hash[32])
 }
 
 /* Hash a string (null-terminated) */
+/* strlen stops at the first zero byte. For binary data containing zeros,
+ * call sha3_256 with an explicit length instead. */
 void sha3_256_string(const char *str, u8 hash[32])
 {
     sha3_256((const u8 *)str, strlen(str), hash);
 }
 
 /* Hash an entire file */
+/* Read fixed-size chunks so memory use does not grow with file size.
+ * The 8192-byte I/O chunk need not match the 136-byte cryptographic block:
+ * sha3_absorb retains partial blocks internally. Return 0 on success, -1 on error. */
 int sha3_256_file(const char *path, u8 hash[32])
 {
     FILE *f = fopen(path, "rb");
