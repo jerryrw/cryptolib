@@ -1,75 +1,61 @@
-#From : https: // github.com/github/gitignore/blob/main/C.gitignore
-#Prerequisites
-*.d
+# All intermediate objects, sanitizer binaries, and fuzz artifacts live here.
+/obj/
 
-#Object files
+# Compiler/linker output (also covers manual builds outside obj/).
 *.o
-*.ko
 *.obj
-*.elf
-
-#Linker output
-*.ilk
-*.map
-*.exp
-
-#Precompiled Headers
+*.d
 *.gch
 *.pch
-
-#Libraries
-*.lib
+*.i
 *.a
+*.lib
 *.la
 *.lo
-
-#Shared objects(inc.Windows DLLs)
-*.dll
 *.so
 *.so.*
 *.dylib
-
-#Executables
+*.dll
 *.exe
 *.out
-*.app
-*.i 
-*86 
-*.x86_64 
-*.hex
+*.map
+*.ilk
+*.exp
 
-#Debug files
-*.dSYM
+# Export lists in symbols/ are source inputs, not generated linker output.
+!/symbols/*.exp
+
+# Executables generated in the project root; keep tests/*.c visible to Git.
+/example
+/example-aes
+/test_nist_md5
+/test_nist_sha256
+/test_nist_sha3
+/test_nist_aes256
+/test_nist_arcfour
+/test_regressions
+/test_examples
+/test_file_failures
+
+# Debug/profiling output.
+*.dSYM/
 *.su
 *.idb
 *.pdb
-
-#Kernel Module Compile Results
-*.mod *
-*.cmd
-.tmp_versions /
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
-
-#debug information files
 *.dwo
+*.gcda
+*.gcno
+*.profraw
+*.profdata
 
-#the executable file
-example
-.vscode /
-exampleaes
-test_nist_md5
-test_nist_sha3
-test_nist_sha256 
-test_nist_aes256
-test_nist_arcfour
-example-aes
-test_regressions
+# Older vector tests can leave these exact fixtures behind after a failed run.
+/tmp_nist_md5.bin
+/tmp_nist_sha256.bin
+/tmp_nist_sha3.bin
+/test_input.txt
+/test_encrypted.bin
+/test_decrypted.txt
 
-/obj/
-
-!symbols/*.exp
-/test_examples
-/test_file_failures
+# Local OS/editor metadata. Already-tracked files are unaffected by ignore rules.
+.DS_Store
+/.vscode/
