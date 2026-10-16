@@ -1,9 +1,16 @@
-// ...new file...
+/*
+ * Known-answer tests for MD5. Expected digests are text hex strings;
+ * the helper converts each pair of hex characters to one byte before comparison.
+ * The file test checks that reading a file and hashing the same bytes in memory
+ * agree with the expected digest. Each check returns 0 for success or 1 for
+ * failure; main adds failures and returns a nonzero status to Make when needed.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "include/md5.h"
+#include "md5.h"
 
 /* ANSI color codes for output */
 #define COLOR_GREEN "\x1b[32m"
@@ -11,6 +18,9 @@
 #define COLOR_YELLOW "\x1b[33m"
 #define COLOR_RESET "\x1b[0m"
 
+/* For example, the text "af" encodes byte 0xaf. byte_str has room for
+ * two characters plus a zero terminator. sscanf("%02x") parses an unsigned
+ * hexadecimal value; &b supplies the address where sscanf should write it. */
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
 {
     size_t hexlen = strlen(hex);
@@ -27,6 +37,8 @@ static int hex_to_bytes(const char *hex, uint8_t *out, size_t out_len)
     return 0;
 }
 
+/* Print each byte as at least two hex digits. This helps diagnose a failed
+ * test without treating arbitrary binary bytes as a zero-terminated string. */
 static void print_hex(const uint8_t *buf, size_t len)
 {
     for (size_t i = 0; i < len; i++)
@@ -66,6 +78,9 @@ static int run_md5_vector(const char *msg, const char *expected_hex)
 
 static int run_md5_file_test(const char *msg, const char *expected_hex)
 {
+/* This older fixture uses a fixed working-directory filename and deletes it
+ * after the check. Run the suite in a disposable build checkout, not alongside
+ * user data with the same name; the examples use private directories instead. */
     const char *tmpfile = "tmp_nist_md5.bin";
     FILE *f = fopen(tmpfile, "wb");
     if (!f)
@@ -116,6 +131,8 @@ int main(void)
 #endif
     printf("╚════════════════════════════════════════╝\n" COLOR_RESET);
 
+/* This local counter starts at zero. Adding each helper result preserves
+ * all failed checks instead of accidentally returning success after printing FAIL. */
     int fails = 0;
 
     fails += run_md5_vector("", "d41d8cd98f00b204e9800998ecf8427e");

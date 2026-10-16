@@ -8,3 +8,6 @@ _aes256_decrypt_file
 _aes256_secure_zero
 _aes256_cleanup
 _aes256_print_hex
+_aes256_encrypted_size
+_aes256_encrypt_buffer_checked
+_aes256_decrypt_buffer_checked

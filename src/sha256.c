@@ -1,10 +1,20 @@
+/*
+ * SHA-256 produces a 32-byte digest from an arbitrary sequence of bytes.
+ * The context owns an unfinished 64-byte input block and eight running words.
+ * init sets the starting state, update feeds bytes, and final pads and serializes.
+ * uint32_t arithmetic intentionally wraps modulo 2^32; this is part of the hash,
+ * not a signal that the program should use floating-point or wider arithmetic.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include "include/sha256.h"
+#include "sha256.h"
 
 // SHA-256 constants
+/* These 64 public constants are prescribed by SHA-256. static keeps the
+ * name local to this file, and const prevents changing the table through K. */
 static const uint32_t K[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -16,6 +26,10 @@ static const uint32_t K[64] = {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
 
 // Bitwise operations
+/* Bit operations mix individual bits. A rotation preserves bits shifted
+ * out of one end by bringing them back at the other. CH chooses y or z
+ * according to x; MAJ gives the majority bit. EP/SIG combine rotations and
+ * shifts. These macros require simple arguments without side effects. */
 #define ROTRIGHT(a, b) (((a) >> (b)) | ((a) << (32 - (b))))
 #define CH(x, y, z) (((x) & (y)) ^ (~(x) & (z)))
 #define MAJ(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
@@ -25,6 +39,8 @@ static const uint32_t K[64] = {
 #define SIG1(x) (ROTRIGHT(x, 17) ^ ROTRIGHT(x, 19) ^ ((x) >> 10))
 
 // Initialize SHA-256 context
+/* The hexadecimal starting words are fixed algorithm constants, not a key.
+ * The caller passes &ctx to let us modify its original context rather than a copy. */
 void sha256_init(SHA256_CTX *ctx)
 {
     ctx->datalen = 0;
@@ -40,6 +56,9 @@ void sha256_init(SHA256_CTX *ctx)
 }
 
 // Update context with more data
+/* Each call may contain a fraction of a block or many blocks. datalen counts
+ * bytes waiting in data; bitlen counts bits from blocks already compressed.
+ * Once 64 bytes accumulate, consume them and reuse the buffer from index zero. */
 void sha256_update(SHA256_CTX *ctx, const uint8_t *data, size_t len)
 {
     for (size_t i = 0; i < len; ++i)
@@ -61,6 +80,8 @@ void sha256_final(SHA256_CTX *ctx, uint8_t *hash)
 {
     size_t i = ctx->datalen;
 
+/* SHA-256 appends a 1 bit, then zeros, then an 8-byte original bit count.
+ * 56 = 64 - 8. If the current block has 56 or more bytes, use another block. */
     // Padding
     if (ctx->datalen < 56)
     {
@@ -78,6 +99,8 @@ void sha256_final(SHA256_CTX *ctx, uint8_t *hash)
         memset(ctx->data, 0, 56);
     }
 
+/* Include the unfinished bytes in the bit count. Store the length big-endian,
+ * most significant byte first; right shifts select the byte to store. */
     // Append total bit length
     ctx->bitlen += ctx->datalen * 8;
     ctx->data[63] = ctx->bitlen;
@@ -110,9 +133,13 @@ void sha256_transform(SHA256_CTX *ctx, const uint8_t *data)
 {
     uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
 
+/* Load the first 16 schedule words from input in big-endian order. Cast
+ * each byte to uint32_t before shifting to avoid signed-int promotion overflow. */
     for (i = 0, j = 0; i < 16; ++i, j += 4)
-        m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
+        m[i] = ((uint32_t)data[j] << 24) | ((uint32_t)data[j + 1] << 16) | ((uint32_t)data[j + 2] << 8) | (uint32_t)data[j + 3];
 
+/* Expand 16 input words into 64 schedule words. Each new word mixes
+ * earlier words, so later rounds still depend on the whole input block. */
     for (; i < 64; ++i)
         m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
 
@@ -125,6 +152,9 @@ void sha256_transform(SHA256_CTX *ctx, const uint8_t *data)
     g = ctx->state[6];
     h = ctx->state[7];
 
+/* a..h are working copies of the running hash. Each round computes two
+ * temporaries and moves the working words along. Assignment order matters: an
+ * old value must be used before its variable is overwritten. */
     for (i = 0; i < 64; ++i)
     {
         t1 = h + EP1(e) + CH(e, f, g) + K[i] + m[i];
@@ -139,6 +169,8 @@ void sha256_transform(SHA256_CTX *ctx, const uint8_t *data)
         a = t1 + t2;
     }
 
+/* Feed forward the working result to the previous state. The next block
+ * starts from this combined value, not from the initial constants. */
     ctx->state[0] += a;
     ctx->state[1] += b;
     ctx->state[2] += c;
@@ -150,6 +182,10 @@ void sha256_transform(SHA256_CTX *ctx, const uint8_t *data)
 }
 
 // Function to calculate SHA-256 hash of a file
+/* FILE * is a C library stream handle, not the file contents. Read a
+ * bounded number of bytes per iteration and hash only bytes_read, especially
+ * on the short final read. The caller must provide at least 32 output bytes;
+ * zero means success and -1 means an I/O failure. This function prints errors. */
 int sha256_file(const char *filepath, uint8_t *hash)
 {
     FILE *file;
@@ -191,21 +227,4 @@ int sha256_file(const char *filepath, uint8_t *hash)
     return 0;
 }
 
-// Example usage
-// int main()
-// {
-//     const char *filepath = "example.txt";
-//     uint8_t hash[32]; // 256 bits = 32 bytes
-
-//     if (calculate_file_sha256(filepath, hash) == 0)
-//     {
-//         printf("SHA-256 Hash: ");
-//         for (int i = 0; i < 32; ++i)
-//         {
-//             printf("%02x", hash[i]);
-//         }
-//         printf("\n");
-//     }
-
-//     return 0;
-// }
+/* See src/example.c for a complete, built example using this API. */

@@ -1,3 +1,20 @@
+/*
+ * Reading this implementation:
+ * 1. random_iv/unpad handle operating-system randomness and message padding.
+ * 2. The lookup tables and small helpers implement AES's byte transformations.
+ * 3. key_expansion prepares the per-round keys; block functions use those keys.
+ * 4. Buffer functions add CBC chaining and padding around the block primitive.
+ * 5. Stream functions process files; atomic_file owns opening/closing/publishing.
+ *
+ * C notes: uint8_t is an unsigned 8-bit byte. A pointer parameter gives access to
+ * caller-owned storage; it does not carry a buffer length. size_t is an unsigned
+ * size/count type. Most helpers are static, meaning other .c files cannot call
+ * them by name. API functions return zero on success and negative error codes.
+ * No function here authenticates ciphertext; valid padding is not proof of origin.
+ */
+
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
 /**
  * aes256.c
  *
@@ -5,32 +22,77 @@
  * Based on FIPS-197 specification
  */
 
-#include "include/aes256.h"
+#include "aes256.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <errno.h>
-#include <err.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
 #include <unistd.h>
-//#include <Availability.h>
-//#include <TargetConditionals.h>
+#if defined(__linux__)
 #include <sys/random.h>
-#include <stdlib.h>
-#include <time.h>
+#endif
+
+/* An IV is the starting block for CBC chaining; it is not the encryption key.
+ * Platform #if branches are chosen while compiling, not while running.
+ * Fail closed means report an error rather than inventing predictable bytes. */
+static int random_iv(uint8_t iv[AES_BLOCK_SIZE])
+{
+#if defined(__APPLE__) || defined(BSD)
+    arc4random_buf(iv, AES_BLOCK_SIZE);
+    return AES_SUCCESS;
+#else
+#if defined(__linux__)
+    size_t offset = 0;
+    while (offset < AES_BLOCK_SIZE)
+    {
+/* getrandom may return fewer bytes than requested. ssize_t is signed so
+ * negative error returns can be distinguished from nonnegative byte counts. */
+        ssize_t n = getrandom(iv + offset, AES_BLOCK_SIZE - offset, 0);
+/* A signal can interrupt a system call. Retry without advancing the offset. */
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        offset += (size_t)n;
+    }
+    if (offset == AES_BLOCK_SIZE)
+        return AES_SUCCESS;
+#endif
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (!f)
+        return AES_ERROR_RANDOM;
+/* fread returns items read; item size is 1 here, so the result is bytes.
+ * Check read and close errors separately so fclose always executes. */
+    size_t n = fread(iv, 1, AES_BLOCK_SIZE, f);
+    int failed = ferror(f);
+    int close_result = fclose(f);
+    return n == AES_BLOCK_SIZE && !failed && close_result == 0
+        ? AES_SUCCESS : AES_ERROR_RANDOM;
+#endif
+}
+
+/* Validate the complete final PKCS7 block before exposing a length. */
+static int unpad(const uint8_t *data, size_t len, size_t *plain_len)
+{
+    if (len < AES_BLOCK_SIZE || len % AES_BLOCK_SIZE != 0)
+        return AES_ERROR_INVALID_PARAM;
+/* PKCS7 appends N copies of byte N. For example, three padding bytes are
+ * 03 03 03. Even a whole-block plaintext gets a full block of padding. */
+    uint8_t padding = data[len - 1];
+    if (padding == 0 || padding > AES_BLOCK_SIZE)
+        return AES_ERROR_INVALID_PARAM;
+/* Check every required padding byte, not just the last one. In C a comparison
+ * is 0 or 1; multiplication masks out positions outside the padding. OR (|=)
+ * remembers any mismatch. This does not make the overall implementation
+ * a constant-time or authenticated encryption implementation. */
+    unsigned int invalid = 0;
+    for (size_t i = 0; i < AES_BLOCK_SIZE; i++)
+        invalid |= (i < padding) * (data[len - 1 - i] ^ padding);
+    if (invalid)
+        return AES_ERROR_INVALID_PARAM;
+    *plain_len = len - padding;
+    return AES_SUCCESS;
+}
 
 /* AES S-Box (Substitution Box) - used in SubBytes transformation */
 static const uint8_t sbox[256] = {
@@ -76,6 +138,10 @@ static const uint8_t rcon[11] = {
 
 /* Galois Field (2^8) multiplication by 2 - used in MixColumns */
 /* cast and parenthesis to avoid promotion surprises */
+/* The highest bit tells us whether shifting needs reduction by the AES
+ * polynomial. XOR (^) acts as addition in this field; it is not exponentiation.
+ * This macro is for simple byte expressions: macro arguments may be evaluated
+ * more than once, so do not pass expressions with side effects such as i++. */
 #define xtime(x) ((uint8_t)((((uint8_t)(x)) << 1) ^ ((((uint8_t)(x)) >> 7) & 1 ? 0x1b : 0x00)))
 
 /* Internal helper functions */
@@ -84,6 +150,9 @@ static const uint8_t rcon[11] = {
  * Perform SubBytes transformation
  * Substitutes each byte in the state with a byte from the S-box
  */
+/* The 16-byte state represents a 4-by-4 matrix stored by columns:
+ * indices 0,1,2,3 are column 0, and 4,5,6,7 are column 1. Thus one row
+ * appears at offsets 0,4,8,12 rather than as four adjacent bytes. */
 static void sub_bytes(uint8_t *state)
 {
     for (int i = 0; i < 16; i++)
@@ -171,6 +240,9 @@ static void inv_shift_rows(uint8_t *state)
  * Perform MixColumns transformation
  * Operates on columns of the state, treating each column as a polynomial
  */
+/* Each new column combines all four old column bytes. temp keeps writes
+ * from overwriting a byte that a later calculation still needs. Multiplication
+ * by 3 is multiplication by 2 XOR the original byte in AES arithmetic. */
 static void mix_columns(uint8_t *state)
 {
     uint8_t temp[16];
@@ -194,6 +266,9 @@ static void mix_columns(uint8_t *state)
 /**
  * Galois Field multiplication - used in InvMixColumns
  */
+/* This is shift-and-add multiplication over GF(2^8), not ordinary integers.
+ * Inspect one multiplier bit per iteration. A left shift that drops the high
+ * bit requires polynomial reduction (XOR with 0x1b). */
 static uint8_t gf_mul(uint8_t a, uint8_t b)
 {
     uint8_t p = 0;
@@ -249,6 +324,9 @@ static void add_round_key(uint8_t *state, const uint8_t *round_key)
  * Key expansion - generates round keys from the cipher key
  * AES-256 uses 60 words (240 bytes) for the key schedule
  */
+/* A word here means four bytes. AES-256 starts with 8 words and derives
+ * 60 total: 15 round keys of 16 bytes, including the initial key addition.
+ * Pointer + N advances by N elements; these uint8_t pointers advance in bytes. */
 static void key_expansion(const uint8_t *key, uint8_t *round_keys)
 {
     uint8_t temp[4];
@@ -302,6 +380,9 @@ static void key_expansion(const uint8_t *key, uint8_t *round_keys)
 
 /* Public API Implementation */
 
+/* ctx belongs to the caller; we fill it rather than allocating it. key must
+ * point to 32 readable bytes. An explicit IV needs 16 bytes; NULL requests
+ * OS randomness. If randomness fails, erase the already-expanded key. */
 int aes256_init(aes256_context *ctx, const uint8_t *key, const uint8_t *iv)
 {
     if (!ctx || !key)
@@ -319,27 +400,11 @@ int aes256_init(aes256_context *ctx, const uint8_t *key, const uint8_t *iv)
     }
     else
     {
-#if defined(__APPLE__) || defined(BSD)
-        /* arc4random_buf is available on macOS and recent BSDs */
-        arc4random_buf(ctx->iv, AES_BLOCK_SIZE);
-#else
-        /* fall back to getrandom or /dev/urandom */
-        if (getrandom(ctx->iv, AES_BLOCK_SIZE, 0) != AES_BLOCK_SIZE)
+        if (random_iv(ctx->iv) != AES_SUCCESS)
         {
-            /* last resort: /dev/urandom */
-            FILE *f = fopen("/dev/urandom", "rb");
-            if (f)
-            {
-                fread(ctx->iv, 1, AES_BLOCK_SIZE, f);
-                fclose(f);
-            }
-            else
-            {
-                /* as a final fallback zero (but this should not happen in normal environments) */
-                memset(ctx->iv, 0, AES_BLOCK_SIZE);
-            }
+            aes256_cleanup(ctx);
+            return AES_ERROR_RANDOM;
         }
-#endif
     }
 
     return AES_SUCCESS;
@@ -354,6 +419,9 @@ void aes256_cleanup(aes256_context *ctx)
     aes256_secure_zero(ctx->iv, sizeof(ctx->iv));
 }
 
+/* This primitive handles exactly 16 bytes and never pads them. Copying input
+ * into a local array allows input and output to be the very same allocation.
+ * Local state is modified round by round; the context key schedule is read-only. */
 int aes256_encrypt_block(const aes256_context *ctx, const uint8_t *input, uint8_t *output)
 {
     if (!ctx || !input || !output)
@@ -385,6 +453,8 @@ int aes256_encrypt_block(const aes256_context *ctx, const uint8_t *input, uint8_
     return AES_SUCCESS;
 }
 
+/* Undo the encryption transformations in reverse round order. Decryption
+ * starts with the last expanded key and ends with the first one. */
 int aes256_decrypt_block(const aes256_context *ctx, const uint8_t *input, uint8_t *output)
 {
     if (!ctx || !input || !output)
@@ -416,19 +486,59 @@ int aes256_decrypt_block(const aes256_context *ctx, const uint8_t *input, uint8_
     return AES_SUCCESS;
 }
 
+/* Compute padding before allocation. size_t arithmetic wraps on overflow,
+ * so check input_len > SIZE_MAX - padding before adding. *required writes
+ * through a pointer to return a second value in addition to the status code. */
+int aes256_encrypted_size(size_t input_len, size_t *required)
+{
+    if (!required)
+        return AES_ERROR_INVALID_PARAM;
+    *required = 0;
+    size_t padding = AES_BLOCK_SIZE - input_len % AES_BLOCK_SIZE;
+    if (input_len > SIZE_MAX - padding)
+        return AES_ERROR_INVALID_PARAM;
+    *required = input_len + padding;
+    return AES_SUCCESS;
+}
+
+/* Compatibility entry points cannot check the caller's actual allocation. */
 int aes256_encrypt_buffer(aes256_context *ctx, const uint8_t *input,
                           size_t input_len, uint8_t *output, size_t *output_len)
 {
-    if (!ctx || !input || !output || !output_len)
-    {
+    size_t capacity = 0;
+    if (output_len) *output_len = 0;
+    if (aes256_encrypted_size(input_len, &capacity) != AES_SUCCESS)
         return AES_ERROR_INVALID_PARAM;
-    }
+    return aes256_encrypt_buffer_checked(ctx, input, input_len, output, capacity, output_len);
+}
 
-    /* Calculate padding length (PKCS7) */
-    size_t padding = AES_BLOCK_SIZE - (input_len % AES_BLOCK_SIZE);
-    size_t padded_len = input_len + padding;
+int aes256_decrypt_buffer(aes256_context *ctx, const uint8_t *input,
+                          size_t input_len, uint8_t *output, size_t *output_len)
+{
+    return aes256_decrypt_buffer_checked(ctx, input, input_len, output, input_len, output_len);
+}
+
+/* output_capacity is the size the caller actually allocated, while
+ * *output_len is the size this call produced. Reset the latter before validation
+ * so a failed operation cannot leave a misleading previous length behind. */
+int aes256_encrypt_buffer_checked(aes256_context *ctx, const uint8_t *input,
+                          size_t input_len, uint8_t *output, size_t output_capacity, size_t *output_len)
+{
+    if (!output_len)
+        return AES_ERROR_INVALID_PARAM;
+    *output_len = 0;
+    if (!ctx || (!input && input_len != 0) || !output)
+        return AES_ERROR_INVALID_PARAM;
+    size_t padded_len;
+    if (aes256_encrypted_size(input_len, &padded_len) != AES_SUCCESS)
+        return AES_ERROR_INVALID_PARAM;
+    if (output_capacity < padded_len)
+        return AES_ERROR_BUFFER_TOO_SMALL;
+    size_t padding = padded_len - input_len;
     *output_len = padded_len;
 
+/* CBC uses C[i] = AES(P[i] XOR C[i-1]), treating the IV as C[-1].
+ * Use a local chaining value so the context IV remains unchanged. */
     uint8_t iv[AES_BLOCK_SIZE];
     memcpy(iv, ctx->iv, AES_BLOCK_SIZE);
 
@@ -475,18 +585,21 @@ int aes256_encrypt_buffer(aes256_context *ctx, const uint8_t *input,
     return AES_SUCCESS;
 }
 
-int aes256_decrypt_buffer(aes256_context *ctx, const uint8_t *input,
-                          size_t input_len, uint8_t *output, size_t *output_len)
+/* CBC decryption is P[i] = AES_inverse(C[i]) XOR C[i-1].
+ * Save the ciphertext before writing plaintext so exact in-place calls work.
+ * Capacity must cover complete ciphertext blocks, even though unpadding will
+ * report a shorter plaintext. Invalid padding clears the produced bytes. */
+int aes256_decrypt_buffer_checked(aes256_context *ctx, const uint8_t *input,
+                          size_t input_len, uint8_t *output, size_t output_capacity, size_t *output_len)
 {
-    if (!ctx || !input || !output || !output_len)
-    {
+    if (!output_len)
         return AES_ERROR_INVALID_PARAM;
-    }
-
-    if (input_len % AES_BLOCK_SIZE != 0)
-    {
+    *output_len = 0;
+    if (!ctx || !input || !output || input_len == 0 || input_len % AES_BLOCK_SIZE != 0)
         return AES_ERROR_INVALID_PARAM;
-    }
+    /* Decryption writes complete blocks before checking their padding. */
+    if (output_capacity < input_len)
+        return AES_ERROR_BUFFER_TOO_SMALL;
 
     uint8_t iv[AES_BLOCK_SIZE];
     memcpy(iv, ctx->iv, AES_BLOCK_SIZE);
@@ -511,227 +624,149 @@ int aes256_decrypt_buffer(aes256_context *ctx, const uint8_t *input,
     }
 
     /* Remove PKCS7 padding */
-    uint8_t padding = output[input_len - 1];
-    if (padding > 0 && padding <= AES_BLOCK_SIZE)
-    {
-        *output_len = input_len - padding;
-    }
-    else
-    {
-        *output_len = input_len;
-    }
-
-    return AES_SUCCESS;
+    int result = unpad(output, input_len, output_len);
+    if (result != AES_SUCCESS)
+        aes256_secure_zero(output, input_len);
+    return result;
 }
 
-int aes256_decrypt_file(aes256_context *ctx, const char *input_file, const char *output_file)
+/* Stream into a private temporary file; only the wrapper publishes it. */
+/* fread asks for one AES block at a time. A short final read gets padding;
+ * when the file ends on a block boundary, the next read returns zero and we
+ * write a full padding block. FILE buffering avoids a system call per byte. */
+static int encrypt_stream(aes256_context *ctx, FILE *fin, FILE *fout)
 {
-    if (!ctx || !input_file || !output_file)
+    uint8_t iv[AES_BLOCK_SIZE], block[AES_BLOCK_SIZE], encrypted[AES_BLOCK_SIZE];
+    memcpy(iv, ctx->iv, sizeof(iv));
+    int result = AES_SUCCESS;
+    if (fwrite(iv, 1, sizeof(iv), fout) != sizeof(iv))
+        result = AES_ERROR_FILE_WRITE;
+    while (result == AES_SUCCESS)
     {
+        size_t n = fread(block, 1, sizeof(block), fin);
+        if (ferror(fin)) { result = AES_ERROR_FILE_READ; break; }
+        if (n < sizeof(block))
+            memset(block + n, (int)(sizeof(block) - n), sizeof(block) - n);
+        for (size_t i = 0; i < sizeof(block); i++) block[i] ^= iv[i];
+        aes256_encrypt_block(ctx, block, encrypted);
+        if (fwrite(encrypted, 1, sizeof(encrypted), fout) != sizeof(encrypted))
+            result = AES_ERROR_FILE_WRITE;
+        memcpy(iv, encrypted, sizeof(iv));
+        if (n < sizeof(block)) break;
+    }
+    aes256_secure_zero(block, sizeof(block));
+    aes256_secure_zero(iv, sizeof(iv));
+    return result;
+}
+
+/* Keep one ciphertext block in reserve. Looking ahead tells us whether the
+ * current block is the last one, whose padding must be removed before writing.
+ * Memory usage stays fixed even for a very large file. */
+static int decrypt_stream(aes256_context *ctx, FILE *fin, FILE *fout)
+{
+    uint8_t iv[AES_BLOCK_SIZE], block[AES_BLOCK_SIZE], next[AES_BLOCK_SIZE];
+    uint8_t plain[AES_BLOCK_SIZE];
+    int result = AES_ERROR_FILE_READ;
+    if (fread(iv, 1, sizeof(iv), fin) != sizeof(iv)) goto cleanup;
+    size_t n = fread(block, 1, sizeof(block), fin);
+    if (ferror(fin)) goto cleanup;
+    result = AES_ERROR_INVALID_PARAM;
+    if (n != sizeof(block)) goto cleanup;
+    for (;;)
+    {
+        n = fread(next, 1, sizeof(next), fin);
+        if (ferror(fin)) { result = AES_ERROR_FILE_READ; break; }
+        if (n != 0 && n != sizeof(next)) { result = AES_ERROR_INVALID_PARAM; break; }
+        aes256_decrypt_block(ctx, block, plain);
+        for (size_t i = 0; i < sizeof(plain); i++) plain[i] ^= iv[i];
+        size_t write_len = sizeof(plain);
+        if (n == 0)
+        {
+            result = unpad(plain, sizeof(plain), &write_len);
+            if (result != AES_SUCCESS) break;
+        }
+        if (fwrite(plain, 1, write_len, fout) != write_len)
+        { result = AES_ERROR_FILE_WRITE; break; }
+        if (n == 0) { result = AES_SUCCESS; break; }
+        memcpy(iv, block, sizeof(iv));
+        memcpy(block, next, sizeof(block));
+    }
+cleanup:
+    aes256_secure_zero(plain, sizeof(plain));
+    aes256_secure_zero(iv, sizeof(iv));
+    return result;
+}
+
+/* transform is a function pointer: the wrapper calls either encrypt_stream
+ * or decrypt_stream with the same (context, input stream, output stream) shape.
+ * This centralizes resource ownership and error cleanup for both operations.
+ * A stream (FILE *) buffers I/O; its underlying descriptor is an integer. */
+static int atomic_file(aes256_context *ctx, const char *input_file,
+                       const char *output_file,
+                       int (*transform)(aes256_context *, FILE *, FILE *))
+{
+    if (!ctx || !input_file || !output_file || !*output_file)
         return AES_ERROR_INVALID_PARAM;
-    }
-
-    FILE *fin = fopen(input_file, "rb");
-    if (!fin)
-    {
-        return AES_ERROR_FILE_OPEN;
-    }
-
-    FILE *fout = fopen(output_file, "wb");
+    size_t len = strlen(output_file);
+/* sizeof includes the terminating zero byte in this array. Appending the
+ * suffix beside the destination puts the temporary file on the same filesystem,
+ * which is required for rename-based atomic replacement. */
+    const char suffix[] = ".tmp.XXXXXX";
+    if (len > SIZE_MAX - sizeof(suffix)) return AES_ERROR_INVALID_PARAM;
+    char *temporary = malloc(len + sizeof(suffix));
+    if (!temporary) return AES_ERROR_MEMORY;
+    memcpy(temporary, output_file, len);
+    memcpy(temporary + len, suffix, sizeof(suffix));
+    FILE *fin = fopen(input_file, "rb"), *fout = NULL;
+    int result = AES_ERROR_FILE_OPEN;
+    if (!fin) goto cleanup;
+    /* Same-directory creation keeps rename atomic and restricts access to 0600. */
+    int fd = mkstemp(temporary);
+    if (fd < 0) goto cleanup;
+/* mkstemp replaces XXXXXX with a unique name and opens the new file.
+ * fdopen wraps that descriptor without opening another file. On success,
+ * fclose(fout) owns closing fd; on failure, we must close fd ourselves. */
+    fout = fdopen(fd, "wb");
     if (!fout)
     {
-        fclose(fin);
-        return AES_ERROR_FILE_OPEN;
+        close(fd);
+        unlink(temporary);
+        goto cleanup;
     }
-
-    /* Read IV from input file */
-    uint8_t iv[AES_BLOCK_SIZE];
-    if (fread(iv, 1, AES_BLOCK_SIZE, fin) != AES_BLOCK_SIZE)
-    {
-        fclose(fin);
-        fclose(fout);
-        return AES_ERROR_FILE_READ;
-    }
-
-    uint8_t buffer[4096];
-    uint8_t decrypted[4096];
-    uint8_t prev_block[4096];
-    size_t prev_bytes = 0;
-    size_t bytes_read;
-
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), fin)) > 0)
-    {
-        /* Decrypt blocks */
-        for (size_t i = 0; i < bytes_read; i += AES_BLOCK_SIZE)
-        {
-            uint8_t next_iv[AES_BLOCK_SIZE];
-            memcpy(next_iv, buffer + i, AES_BLOCK_SIZE);
-
-            aes256_decrypt_block(ctx, buffer + i, decrypted + i);
-
-            /* XOR with IV */
-            for (int j = 0; j < AES_BLOCK_SIZE; j++)
-            {
-                decrypted[i + j] ^= iv[j];
-            }
-
-            memcpy(iv, next_iv, AES_BLOCK_SIZE);
-        }
-
-        /* Write previous block if any (to handle padding) */
-        if (prev_bytes > 0)
-        {
-            if (fwrite(prev_block, 1, prev_bytes, fout) != prev_bytes)
-            {
-                fclose(fin);
-                fclose(fout);
-                return AES_ERROR_FILE_WRITE;
-            }
-        }
-
-        /* Store current block for next iteration */
-        memcpy(prev_block, decrypted, bytes_read);
-        prev_bytes = bytes_read;
-    }
-
-    /* Handle last block with padding removal */
-    if (prev_bytes > 0)
-    {
-        uint8_t padding = prev_block[prev_bytes - 1];
-        if (padding > 0 && padding <= AES_BLOCK_SIZE)
-        {
-            prev_bytes -= padding;
-        }
-
-        if (fwrite(prev_block, 1, prev_bytes, fout) != prev_bytes)
-        {
-            fclose(fin);
-            fclose(fout);
-            return AES_ERROR_FILE_WRITE;
-        }
-    }
-
-    fclose(fin);
-    fclose(fout);
-    return AES_SUCCESS;
+    result = transform(ctx, fin, fout);
+    if (fclose(fin) != 0 && result == AES_SUCCESS) result = AES_ERROR_FILE_READ;
+    fin = NULL;
+/* fflush drains C library buffers; fsync asks the OS to persist file data.
+ * Do both before renaming. Short-circuit && avoids committing a failed transform.
+ * Even on failure, fclose must still run to release the stream and descriptor. */
+    if (result == AES_SUCCESS && (fflush(fout) != 0 || fsync(fileno(fout)) != 0))
+        result = AES_ERROR_FILE_WRITE;
+    if (fclose(fout) != 0 && result == AES_SUCCESS) result = AES_ERROR_FILE_WRITE;
+    fout = NULL;
+    if (result == AES_SUCCESS && rename(temporary, output_file) != 0)
+        result = AES_ERROR_FILE_WRITE;
+    if (result != AES_SUCCESS) unlink(temporary);
+/* All branches converge here. NULL means a resource was never acquired
+ * or has already been released, which prevents closing a stream twice. */
+cleanup:
+    if (fin) fclose(fin);
+    free(temporary);
+    return result;
 }
 
 int aes256_encrypt_file(aes256_context *ctx, const char *input_file, const char *output_file)
 {
-    if (!ctx || !input_file || !output_file)
-    {
-        return AES_ERROR_INVALID_PARAM;
-    }
-
-    FILE *fin = fopen(input_file, "rb");
-    if (!fin)
-    {
-        return AES_ERROR_FILE_OPEN;
-    }
-
-    FILE *fout = fopen(output_file, "wb");
-    if (!fout)
-    {
-        fclose(fin);
-        return AES_ERROR_FILE_OPEN;
-    }
-
-    /* Write IV to output file */
-    if (fwrite(ctx->iv, 1, AES_BLOCK_SIZE, fout) != AES_BLOCK_SIZE)
-    {
-        fclose(fin);
-        fclose(fout);
-        return AES_ERROR_FILE_WRITE;
-    }
-
-    uint8_t iv[AES_BLOCK_SIZE];
-    memcpy(iv, ctx->iv, AES_BLOCK_SIZE);
-
-    uint8_t inbuf[4096];
-    uint8_t outbuf[4096 + AES_BLOCK_SIZE]; /* room for pad block if needed */
-    size_t tail_len = 0;
-    uint8_t tail[AES_BLOCK_SIZE];
-
-    while (1)
-    {
-        size_t n = fread(inbuf, 1, sizeof(inbuf) - tail_len, fin);
-        if (n == 0 && feof(fin))
-            break;
-        if (ferror(fin))
-        {
-            fclose(fin);
-            fclose(fout);
-            return AES_ERROR_FILE_READ;
-        }
-
-        /* total available bytes = tail_len + n */
-        size_t total = tail_len + n;
-        /* copy new data after any tail */
-        if (tail_len)
-            memcpy(inbuf, tail, tail_len); /* move previous tail to front */
-        /* Now process all full blocks except keep last partial (tail) */
-        size_t process_up_to = (total / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
-        size_t processed = 0;
-        while (processed < process_up_to)
-        {
-            uint8_t block[AES_BLOCK_SIZE];
-            memcpy(block, inbuf + processed, AES_BLOCK_SIZE);
-            /* XOR with IV */
-            for (int j = 0; j < AES_BLOCK_SIZE; j++)
-                block[j] ^= iv[j];
-            aes256_encrypt_block(ctx, block, outbuf + processed);
-            memcpy(iv, outbuf + processed, AES_BLOCK_SIZE);
-            processed += AES_BLOCK_SIZE;
-        }
-
-        /* write processed bytes */
-        if (process_up_to > 0)
-        {
-            if (fwrite(outbuf, 1, process_up_to, fout) != process_up_to)
-            {
-                fclose(fin);
-                fclose(fout);
-                return AES_ERROR_FILE_WRITE;
-            }
-        }
-
-        /* store tail (remaining bytes) */
-        tail_len = total - process_up_to;
-        if (tail_len)
-        {
-            memcpy(tail, inbuf + process_up_to, tail_len);
-        }
-
-        /* if EOF reached break to pad tail */
-        if (feof(fin))
-            break;
-    }
-
-    /* pad tail and encrypt final block(s) */
-    size_t padding = AES_BLOCK_SIZE - (tail_len % AES_BLOCK_SIZE);
-    /* if tail_len == 0 then we'll create a full padding block (16 bytes = 0x10) */
-    uint8_t final_block[AES_BLOCK_SIZE];
-    if (tail_len > 0)
-        memcpy(final_block, tail, tail_len);
-    memset(final_block + tail_len, (uint8_t)padding, padding);
-
-    /* XOR with IV and encrypt final block */
-    for (int j = 0; j < AES_BLOCK_SIZE; j++)
-        final_block[j] ^= iv[j];
-    aes256_encrypt_block(ctx, final_block, outbuf);
-
-    if (fwrite(outbuf, 1, AES_BLOCK_SIZE, fout) != AES_BLOCK_SIZE)
-    {
-        fclose(fin);
-        fclose(fout);
-        return AES_ERROR_FILE_WRITE;
-    }
-
-    fclose(fin);
-    fclose(fout);
-    return AES_SUCCESS;
+    return atomic_file(ctx, input_file, output_file, encrypt_stream);
 }
 
+int aes256_decrypt_file(aes256_context *ctx, const char *input_file, const char *output_file)
+{
+    return atomic_file(ctx, input_file, output_file, decrypt_stream);
+}
+
+/* An ordinary memset of dead data may be removed by an optimizing compiler.
+ * Writing through a volatile-qualified pointer makes these byte writes observable
+ * to the compiler. It does not erase other copies or memory already freed. */
 void aes256_secure_zero(void *ptr, size_t len)
 {
     if (!ptr)

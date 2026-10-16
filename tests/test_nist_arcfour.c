@@ -1,7 +1,14 @@
+/*
+ * RC4 tests compare a published keystream prefix and check repeatability.
+ * Encrypting all-zero bytes reveals the keystream because zero XOR x equals x.
+ * Separate contexts with the same key must start identically; advancing a context
+ * changes its next output. failures counts failed checks for the process status.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "include/arcfour.h"
+#include "arcfour.h"
 
 /* ANSI color codes for output */
 #define COLOR_GREEN "\x1b[32m"
@@ -21,9 +28,14 @@ void print_hex(unsigned char *data, size_t len)
     printf("\n");
 }
 
+static int failures = 0;
+
+/* Printing a failure is insufficient for automation. Remember it in the
+ * file-local counter so main can return a failing exit status too. */
 void print_test_result(const char *test_name, int passed)
 {
     printf("%s: %s\n", test_name, passed ? PASS : FAIL);
+    failures += !passed;
 }
 
 /* Test with our own verified keystream */
@@ -55,6 +67,8 @@ void test_verified_keystream()
 }
 
 /* Multiple encryption test */
+/* Different keys should produce different streams for this fixture. This
+ * is a sanity check, not a statistical proof of security. */
 void test_multiple_encryptions()
 {
     unsigned char key1[] = {0xFF};
@@ -82,6 +96,8 @@ void test_multiple_encryptions()
 }
 
 /* Consistency test - same key always produces same keystream */
+/* Create both contexts before comparing. Reinitialization, rather than
+ * continuing with one already-used context, reproduces a stream prefix. */
 void test_consistency()
 {
     unsigned char key[] = {0x01, 0x02, 0x03, 0x04, 0x05};
@@ -140,5 +156,5 @@ int main()
 
     printf("\n" COLOR_YELLOW "═══════════════════════════════════════\n" COLOR_RESET);
 
-    return 0;
+    return failures ? 1 : 0;
 }
