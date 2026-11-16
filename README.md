@@ -101,7 +101,9 @@ The suite includes:
 5. Standalone compilation of every header in `include/`.
 6. Example randomness failures, unequal-length file comparisons, read errors,
    mismatch reporting, and failure exit statuses.
-7. Atomic output preservation under malformed input and injected open, read,
+7. Always-active test checks under `NDEBUG`, failure accounting in the AES
+   vector suite, and exact RC4 skipping counts.
+8. Atomic output preservation under malformed input and injected open, read,
    write, flush, sync, close, temporary-file, and rename failures.
 
 Run tests with:
@@ -123,7 +125,8 @@ with the sanitizer runtimes installed.
 
 GitHub Actions runs `make check` and `make sanitize` on macOS and Linux. The Linux
 job also runs the fuzz smoke test. These jobs run on pushes, pull requests, or a
-manual workflow dispatch.
+manual workflow dispatch. A separate release-flags step rebuilds and runs
+`make check` with `-DNDEBUG` to ensure test checks and setup remain active.
 
 ### Fuzzing AES Decryption
 
@@ -156,6 +159,15 @@ MD5 and RC4 are included as legacy educational demonstrations.
 and a deterministic FIPS-197 block vector. Both programs check failures and
 return a nonzero exit status on error. Keys come from `/dev/urandom` and are
 cleared after use; the file example removes its private temporary directory.
+
+### RC4 Skip API
+
+Use `rc4_skip(ctx, count)` to discard exactly `count` bytes from a valid context.
+For example, `rc4_skip(ctx, 2048)` advances by 2,048 bytes and returns zero on
+success; a NULL context returns -1. A zero count leaves a valid context unchanged.
+This replaces the old `rc4_skip(counter, ctx)` macro; update callers to the new
+argument order and explicit count. Discarding bytes does not make RC4 suitable
+for production use.
 
 ## Performance
 

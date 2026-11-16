@@ -4,12 +4,12 @@
  * oracle is an existing sentinel destination: after every failure its bytes must
  * still match, and temporary files must be gone. Including aes256.c here is an
  * intentional test-only technique; do not also link its normal object into this
- * executable. assert performs checks/setup, so build this file without NDEBUG.
+ * executable. CHECK always performs checks/setup, including builds with NDEBUG.
  */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
-#include <assert.h>
+#include "test_support.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,31 +110,31 @@ static int test_rename(const char *a, const char *b)
  * The caller supplies its length; this helper does not assume text. */
 static void put(const char *path, const void *data, size_t n)
 {
-    FILE *f = fopen(path, "wb"); assert(f);
-    assert(fwrite(data, 1, n, f) == n); assert(fclose(f) == 0);
+    FILE *f = fopen(path, "wb"); CHECK(f);
+    CHECK(fwrite(data, 1, n, f) == n); CHECK(fclose(f) == 0);
 }
 /* Read more than the expected length so unexpected trailing bytes are
  * noticed too. Compare only after verifying the exact number read. */
 static void expect(const char *path, const void *data, size_t n)
 {
-    uint8_t buffer[128]; assert(n <= sizeof(buffer));
-    FILE *f = fopen(path, "rb"); assert(f);
-    assert(fread(buffer, 1, sizeof(buffer), f) == n);
-    assert(memcmp(buffer, data, n) == 0); assert(fclose(f) == 0);
+    uint8_t buffer[128]; CHECK(n <= sizeof(buffer));
+    FILE *f = fopen(path, "rb"); CHECK(f);
+    CHECK(fread(buffer, 1, sizeof(buffer), f) == n);
+    CHECK(memcmp(buffer, data, n) == 0); CHECK(fclose(f) == 0);
 }
 /* DIR/readdir enumerate directory entries. strstr searches names for the
  * temporary-file marker. closedir releases the directory handle, like fclose. */
 static void no_temporary_files(const char *path)
 {
-    if (last_temporary[0]) assert(access(last_temporary, F_OK) != 0);
-    DIR *dir = opendir(path); assert(dir);
+    if (last_temporary[0]) CHECK(access(last_temporary, F_OK) != 0);
+    DIR *dir = opendir(path); CHECK(dir);
     struct dirent *entry;
-    while ((entry = readdir(dir))) assert(strstr(entry->d_name, ".tmp.") == NULL);
-    assert(closedir(dir) == 0);
+    while ((entry = readdir(dir))) CHECK(strstr(entry->d_name, ".tmp.") == NULL);
+    CHECK(closedir(dir) == 0);
 }
 int main(void)
 {
-    char dir[] = "/tmp/cryptolib-file-failures-XXXXXX"; assert(mkdtemp(dir));
+    char dir[] = "/tmp/cryptolib-file-failures-XXXXXX"; CHECK(mkdtemp(dir));
     char input[128], encrypted[128], output[128], missing[128];
     snprintf(input, sizeof(input), "%s/input", dir);
     snprintf(encrypted, sizeof(encrypted), "%s/encrypted", dir);
@@ -143,12 +143,12 @@ int main(void)
     const char message[] = "Preserve the destination on every failure.";
     const char sentinel[] = "existing destination";
     aes256_context ctx; uint8_t key[32] = {0}, iv[16] = {0};
-    assert(aes256_init(&ctx, key, iv) == AES_SUCCESS);
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
     put(input, message, sizeof(message));
-    assert(aes256_encrypt_file(&ctx, input, encrypted) == AES_SUCCESS);
+    CHECK(aes256_encrypt_file(&ctx, input, encrypted) == AES_SUCCESS);
 /* stat obtains metadata. The octal mask 0777 keeps permission bits; 0600
  * means read/write for the owner only. Leading zero denotes octal in C. */
-    struct stat st; assert(stat(encrypted, &st) == 0 && (st.st_mode & 0777) == 0600);
+    struct stat st; CHECK(stat(encrypted, &st) == 0 && (st.st_mode & 0777) == 0600);
 /* An array of function pointers lets the same failure matrix exercise both
  * encryption and decryption. operations[op](...) calls the selected function. */
     int (*operations[])(aes256_context *, const char *, const char *) = {
@@ -161,42 +161,42 @@ int main(void)
         for (int f = READ_FAIL; f <= TEMP_FAIL; f++) {
             put(output, sentinel, sizeof(sentinel));
             failure = f;
-            assert(operations[op](&ctx, source, output) != AES_SUCCESS);
+            CHECK(operations[op](&ctx, source, output) != AES_SUCCESS);
             failure = NONE;
             expect(output, sentinel, sizeof(sentinel));
             no_temporary_files(dir);
         }
-        assert(operations[op](&ctx, missing, output) == AES_ERROR_FILE_OPEN);
+        CHECK(operations[op](&ctx, missing, output) == AES_ERROR_FILE_OPEN);
         expect(output, sentinel, sizeof(sentinel));
         /* An existing directory cannot be replaced with a regular file. */
-        assert(operations[op](&ctx, source, dir) == AES_ERROR_FILE_WRITE);
+        CHECK(operations[op](&ctx, source, dir) == AES_ERROR_FILE_WRITE);
         no_temporary_files(dir);
     }
     /* Malformed ciphertext after a complete block cannot publish partial plaintext. */
     uint8_t malformed[49] = {0};
     put(encrypted, malformed, sizeof(malformed));
-    assert(aes256_decrypt_file(&ctx, encrypted, output) != AES_SUCCESS);
+    CHECK(aes256_decrypt_file(&ctx, encrypted, output) != AES_SUCCESS);
     expect(output, sentinel, sizeof(sentinel));
     /* Valid block lengths with bad final padding must also preserve output. */
     uint8_t block[16], ciphertext[48] = {0};
     memset(block, 'A', sizeof(block));
-    assert(aes256_encrypt_block(&ctx, block, ciphertext + 16) == AES_SUCCESS);
+    CHECK(aes256_encrypt_block(&ctx, block, ciphertext + 16) == AES_SUCCESS);
     block[15] = 2; /* The preceding 'A' is not a matching padding byte. */
     for (size_t i = 0; i < sizeof(block); i++) block[i] ^= ciphertext[16 + i];
-    assert(aes256_encrypt_block(&ctx, block, ciphertext + 32) == AES_SUCCESS);
+    CHECK(aes256_encrypt_block(&ctx, block, ciphertext + 32) == AES_SUCCESS);
     put(encrypted, ciphertext, sizeof(ciphertext));
-    assert(aes256_decrypt_file(&ctx, encrypted, output) == AES_ERROR_INVALID_PARAM);
+    CHECK(aes256_decrypt_file(&ctx, encrypted, output) == AES_ERROR_INVALID_PARAM);
     expect(output, sentinel, sizeof(sentinel));
-    assert(unlink(output) == 0);
-    assert(aes256_decrypt_file(&ctx, encrypted, output) != AES_SUCCESS);
-    assert(access(output, F_OK) != 0);
+    CHECK(unlink(output) == 0);
+    CHECK(aes256_decrypt_file(&ctx, encrypted, output) != AES_SUCCESS);
+    CHECK(access(output, F_OK) != 0);
     no_temporary_files(dir);
     /* Successful replacement and same-path round-trip are supported. */
-    assert(aes256_encrypt_file(&ctx, input, input) == AES_SUCCESS);
-    assert(aes256_decrypt_file(&ctx, input, input) == AES_SUCCESS);
+    CHECK(aes256_encrypt_file(&ctx, input, input) == AES_SUCCESS);
+    CHECK(aes256_decrypt_file(&ctx, input, input) == AES_SUCCESS);
     expect(input, message, sizeof(message));
     aes256_cleanup(&ctx);
-    assert(unlink(input) == 0 && unlink(encrypted) == 0 && rmdir(dir) == 0);
+    CHECK(unlink(input) == 0 && unlink(encrypted) == 0 && rmdir(dir) == 0);
     puts("Atomic file failure tests passed");
     return 0;
 }

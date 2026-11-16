@@ -22,7 +22,7 @@ CFLAGS = -std=c11 -Wall -O3 -march=native -mtune=native
 # Derive filenames from lists rather than repeating one recipe per algorithm.
 # addprefix/addsuffix build lists; filter/filter-out select names from them.
 ALGORITHMS := sha3 sha256 md5 aes256 arcfour
-TESTS := $(addprefix test_nist_,$(ALGORITHMS)) test_regressions test_examples test_file_failures
+TESTS := $(addprefix test_nist_,$(ALGORITHMS)) test_regressions test_examples test_file_failures test_test_helpers
 OBJDIR := obj
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(ALGORITHMS) $(TESTS) example example-aes example_general_driver))
 
@@ -89,6 +89,13 @@ test_examples: $(addprefix $(OBJDIR)/,test_examples.o example_general_driver.o a
 test_file_failures: $(OBJDIR)/test_file_failures.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
+# Compile this self-test with NDEBUG so CHECK regressions cannot hide.
+$(OBJDIR)/test_test_helpers.o: CPPFLAGS += -DNDEBUG
+
+# Includes the AES vector suite under renamed entry points for failure injection.
+test_test_helpers: $(OBJDIR)/test_test_helpers.o $(OBJDIR)/aes256.o
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+
 example: $(OBJDIR)/example.o $(LIBRARIES)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -L. $(addprefix -l,$(ALGORITHMS)) $(RPATH) $(LDLIBS)
 
@@ -123,7 +130,7 @@ check: test example example-aes
 
 # Separate binaries keep sanitizer flags out of ordinary builds.
 LIB_SOURCES := src/aes256.c src/arcfour.c src/md5.c src/sha256.c src/sha3_256.c
-HEADERS := $(wildcard include/*.h)
+HEADERS := $(wildcard include/*.h tests/*.h)
 SAN_DIR := $(OBJDIR)/sanitize
 # ASan detects invalid memory access; UBSan checks undefined C behavior.
 # -g and frame pointers aid diagnostics; non-recovering failures stop the test.
@@ -137,6 +144,9 @@ $(SAN_DIR):
 # Their special recipes avoid linking a second copy of the same functions.
 $(SAN_DIR)/test_examples: tests/test_examples.c tests/example_general_driver.c src/example.c src/example-aes.c $(LIB_SOURCES) $(HEADERS) | $(SAN_DIR)
 	$(CC) $(CPPFLAGS) $(SAN_FLAGS) tests/test_examples.c tests/example_general_driver.c $(LIB_SOURCES) -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(SAN_DIR)/test_test_helpers: tests/test_test_helpers.c tests/test_nist_aes256.c src/aes256.c $(HEADERS) | $(SAN_DIR)
+	$(CC) $(CPPFLAGS) $(SAN_FLAGS) -DNDEBUG $< src/aes256.c -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(SAN_DIR)/test_file_failures: tests/test_file_failures.c src/aes256.c $(HEADERS) | $(SAN_DIR)
 	$(CC) $(CPPFLAGS) $(SAN_FLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)

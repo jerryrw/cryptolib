@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
 /*
  * Known-answer tests for MD5. Expected digests are text hex strings;
  * the helper converts each pair of hex characters to one byte before comparison.
@@ -6,6 +8,7 @@
  * failure; main adds failures and returns a nonzero status to Make when needed.
  */
 
+#include "test_support.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,31 +81,32 @@ static int run_md5_vector(const char *msg, const char *expected_hex)
 
 static int run_md5_file_test(const char *msg, const char *expected_hex)
 {
-/* This older fixture uses a fixed working-directory filename and deletes it
- * after the check. Run the suite in a disposable build checkout, not alongside
- * user data with the same name; the examples use private directories instead. */
-    const char *tmpfile = "tmp_nist_md5.bin";
-    FILE *f = fopen(tmpfile, "wb");
-    if (!f)
-    {
-        perror("fopen");
+    test_fixture fixture;
+    if (test_fixture_init(&fixture) != 0) return 1;
+    FILE *f = fopen(fixture.input, "wb");
+    if (!f) { test_fixture_cleanup(&fixture); return 1; }
+    size_t written = fwrite(msg, 1, strlen(msg), f);
+    int closed = fclose(f);
+    if (written != strlen(msg) || closed != 0) {
+        test_fixture_cleanup(&fixture);
         return 1;
     }
-    fwrite(msg, 1, strlen(msg), f);
-    fclose(f);
 
     uint8_t expected[16];
-    hex_to_bytes(expected_hex, expected, sizeof(expected));
-
-    uint8_t digest[16];
-    if (md5_file(tmpfile, digest) != 0)
-    {
-        printf("md5_file failed\n");
-        remove(tmpfile);
+    if (hex_to_bytes(expected_hex, expected, sizeof(expected)) != 0) {
+        test_fixture_cleanup(&fixture);
         return 1;
     }
 
-    remove(tmpfile);
+    uint8_t digest[16];
+    if (md5_file(fixture.input, digest) != 0)
+    {
+        printf("md5_file failed\n");
+        test_fixture_cleanup(&fixture);
+        return 1;
+    }
+
+    if (test_fixture_cleanup(&fixture) != 0) return 1;
 
     if (memcmp(digest, expected, sizeof(digest)) == 0)
     {

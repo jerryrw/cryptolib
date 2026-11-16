@@ -166,10 +166,23 @@ standard. Regression tests concentrate on boundaries and past mistakes. Fault
 injection makes specific calls fail so cleanup and preservation can be checked.
 Fuzzing repeatedly mutates inputs and checks invariants under sanitizers.
 
-`assert(expression)` aborts when its expression is false. These tests also perform
-setup inside assertions: **do not define `NDEBUG` when building them**, because it
-removes those expressions entirely. Applications instead use explicit checks and
-return codes; assertions are not a replacement for validating external input.
+`assert(expression)` from the C standard library can be disabled with `NDEBUG`.
+This project's test-only `CHECK(expression)` helper instead always evaluates its
+expression, reports the file, line, and expression, and exits with failure if it
+is false. It remains active when a release build defines `NDEBUG`, including for
+setup calls inside checks. Application code uses explicit return-code handling;
+test checks are not a substitute for validating external input.
+
+The older AES and hash-vector tests now use the same private-directory fixture
+helper in `tests/test_support.h`. Its byte-comparison helper reads both streams
+together so it catches even a one-byte difference in either file's length.
+`tests/test_test_helpers.c` injects failures into the AES vector suite itself to
+verify that failures are counted and the entry point returns a failing status.
+It also checks that `CHECK(0)` fails in a child process.
+
+RC4 stream skipping is a normal function: `rc4_skip(ctx, count)` discards exactly
+`count` bytes and reports invalid contexts. It replaces the historical
+`rc4_skip(counter, ctx)` macro, which used an implicit and incorrect fixed count.
 
 Run `make check`, `make sanitize`, and (with a compatible Clang) `make fuzz-smoke`.
 A successful bounded fuzz run only reports that no tested input triggered a

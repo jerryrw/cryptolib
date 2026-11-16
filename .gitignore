@@ -36,6 +36,7 @@
 /test_regressions
 /test_examples
 /test_file_failures
+/test_test_helpers
 
 # Debug/profiling output.
 *.dSYM/
@@ -47,14 +48,6 @@
 *.gcno
 *.profraw
 *.profdata
-
-# Older vector tests can leave these exact fixtures behind after a failed run.
-/tmp_nist_md5.bin
-/tmp_nist_sha256.bin
-/tmp_nist_sha3.bin
-/test_input.txt
-/test_encrypted.bin
-/test_decrypted.txt
 
 # Local OS/editor metadata. Already-tracked files are unaffected by ignore rules.
 .DS_Store

@@ -61,13 +61,6 @@ rc4_ctx *rc4_init(rc4_byte_t *key, size_t keylen)
     ctx->i = 0;
     ctx->j = 0;
 
-/* The disabled discard loop below changes the stream position. The RFC
- * test vectors start at byte zero; discarding bytes requires both peers to
- * advance by exactly the same count. The current loop would discard 2049 bytes. */
-    // this works for use but does not pass one test due to the nature of the test
-    // for (int x = 0; x < 2049; x++)
-    //     (volatile rc4_byte_t) rc4_byte(ctx); // explicitly tell compiler to not optimize
-
     return ctx;
 }
 
@@ -97,6 +90,18 @@ rc4_byte_t rc4_byte(rc4_ctx *ctx)
     t = (ctx->S[ctx->i] + ctx->S[ctx->j]) % 256;
 
     return ctx->S[t];
+}
+
+/* A real function evaluates caller arguments once and is safe in if/else.
+ * Count down rather than using i <= count, which could wrap at SIZE_MAX. */
+int rc4_skip(rc4_ctx *ctx, size_t count)
+{
+    if (!ctx) return -1;
+    while (count != 0) {
+        (void)rc4_byte(ctx);
+        count--;
+    }
+    return 0;
 }
 
 /*

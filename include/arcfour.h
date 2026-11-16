@@ -15,15 +15,6 @@
 /* Type definitions for RC4 */
 typedef unsigned char rc4_byte_t;
 
-/* Historical convenience macro: this actually discards 2049 bytes (0..2048).
- * x is a caller-supplied loop counter and y a context pointer. It expands to a
- * for statement, not a function. The volatile cast does not make the algorithm
- * secure; state changes, rather than the discarded return value, matter here. */
-// used to skip the first 2048 bytes of output for statistical purposes
-#define rc4_skip(x, y)         \
-    for (x = 0; x < 2049; x++) \
-        (volatile rc4_byte_t) rc4_byte(y); // explicitly tell compiler to not optimize
-
 /* RC4 context structure - maintains state between operations */
 typedef struct
 {
@@ -39,6 +30,11 @@ typedef struct
 rc4_ctx *rc4_init(rc4_byte_t *key, size_t size);
 /* Requires a valid initialized context; generates one byte and changes ctx. */
 rc4_byte_t rc4_byte(rc4_ctx *ctx);
+/* Discard exactly count keystream bytes. Returns 0 on success, -1 for NULL ctx.
+ * Zero count leaves a valid context unchanged. This replaces the historical
+ * rc4_skip(counter, ctx) macro; callers now use rc4_skip(ctx, 2048), for example.
+ * Both peers must discard the same count to retain matching stream positions. */
+int rc4_skip(rc4_ctx *ctx, size_t count);
 /* Read exactly size plaintext bytes; return size ciphertext bytes plus a
  * convenience zero terminator. The ciphertext is binary, so never use strlen
  * to recover its length. NULL plaintext is accepted only for size == 0.
