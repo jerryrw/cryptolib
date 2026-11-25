@@ -95,10 +95,13 @@ and do not pass them to `free`.
 `malloc(n)` obtains heap storage. Check for `NULL`, retain the allocation size,
 and eventually call `free` exactly once. Freeing does not erase data, and accessing
 an allocation after freeing it is invalid. Wipe sensitive material before freeing
-it. The AES cleanup function wipes a context but does not release its storage.
+it. The AES, hash, and RC4 cleanup functions wipe contexts without releasing storage.
+Pass NULL safely when no context exists. Cleanup does not replace initialization.
 
-`rc4_init` returns an owned context that needs `rc4_free`. `rc4_encrypt` returns a
-separate owned buffer that needs `free`. Most other APIs borrow caller buffers;
+`rc4_init` returns an owned context that needs `rc4_free`, which wipes it before
+freeing. `rc4_init_checked` instead initializes caller-owned (possibly stack)
+storage; use `rc4_cleanup` to wipe that storage without freeing it.
+`rc4_encrypt` returns a separate owned buffer that needs `free`. Most other APIs borrow caller buffers;
 they do not allocate output or transfer ownership.
 
 The examples initialize resource pointers to `NULL` and use `goto cleanup` to
@@ -188,3 +191,23 @@ Run `make check`, `make sanitize`, and (with a compatible Clang) `make fuzz-smok
 A successful bounded fuzz run only reports that no tested input triggered a
 failure; it is not an exhaustive proof. Failure-injection tests intentionally print
 example error messages while verifying that the tests themselves succeed.
+
+## Shared status codes and installed use
+
+`include/cryptolib.h` defines `CRYPTOLIB_SUCCESS` and `CRYPTOLIB_ERROR_*` values.
+AES's older `AES_*` constants alias the same numbers. Hash file APIs return these
+shared codes without printing errors; output is unchanged when an operation fails.
+Void hash primitives still require initialized contexts and valid buffers. Their
+interfaces stay compatible; cleanup is an explicit additional operation.
+
+The checked RC4 API returns status codes and uses caller-owned output. It checks
+capacity before consuming any stream state. The old pointer-returning allocation
+wrappers remain available and signal failures with NULL.
+
+`make crosscheck` loads the actual shared libraries with Python ctypes and tests
+against hashlib/OpenSSL. `ctypes` declarations must match the C struct layout and
+function signatures; otherwise pointer or integer values could be misinterpreted.
+`make installcheck` creates a staged prefix, copies `examples/consumer` outside the
+checkout, and compiles it using only installed public headers and libraries. This
+checks that including headers is enough to declare the APIs and that the installed
+libraries actually supply their definitions to the linker.

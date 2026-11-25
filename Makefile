@@ -22,7 +22,7 @@ CFLAGS = -std=c11 -Wall -O3 -march=native -mtune=native
 # Derive filenames from lists rather than repeating one recipe per algorithm.
 # addprefix/addsuffix build lists; filter/filter-out select names from them.
 ALGORITHMS := sha3 sha256 md5 aes256 arcfour
-TESTS := $(addprefix test_nist_,$(ALGORITHMS)) test_regressions test_examples test_file_failures test_test_helpers
+TESTS := $(addprefix test_nist_,$(ALGORITHMS)) test_regressions test_examples test_file_failures test_test_helpers test_api test_hash_io
 OBJDIR := obj
 OBJECTS := $(addprefix $(OBJDIR)/,$(addsuffix .o,$(ALGORITHMS) $(TESTS) example example-aes example_general_driver))
 
@@ -96,6 +96,13 @@ $(OBJDIR)/test_test_helpers.o: CPPFLAGS += -DNDEBUG
 test_test_helpers: $(OBJDIR)/test_test_helpers.o $(OBJDIR)/aes256.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
+test_api: $(addprefix $(OBJDIR)/,test_api.o aes256.o arcfour.o md5.o sha256.o sha3.o)
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+
+# Test substitutes file-error calls by including the hash implementations.
+test_hash_io: $(OBJDIR)/test_hash_io.o
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+
 example: $(OBJDIR)/example.o $(LIBRARIES)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -L. $(addprefix -l,$(ALGORITHMS)) $(RPATH) $(LDLIBS)
 
@@ -119,7 +126,7 @@ $(OBJDIR):
 # Remove known generated files only. Keep the fuzz corpus/crash artifacts
 # so interesting inputs are not lost during normal cleanup.
 clean:
-	rm -f $(OBJECTS) $(OBJECTS:.o=.d) $(LIBRARIES) $(TESTS) example example-aes $(SAN_PROGRAMS) $(FUZZ_DIR)/aes_decrypt $(FUZZ_DIR)/seed
+	rm -f $(OBJECTS) $(OBJECTS:.o=.d) $(LIBRARIES) $(STATIC_LIBRARIES) libcryptolib.a $(TESTS) example example-aes $(SAN_PROGRAMS) $(FUZZ_DIR)/aes_decrypt $(FUZZ_DIR)/seed
 
 -include $(OBJECTS:.o=.d)
 
@@ -130,7 +137,7 @@ check: test example example-aes
 
 # Separate binaries keep sanitizer flags out of ordinary builds.
 LIB_SOURCES := src/aes256.c src/arcfour.c src/md5.c src/sha256.c src/sha3_256.c
-HEADERS := $(wildcard include/*.h tests/*.h)
+HEADERS := $(wildcard include/*.h src/*.h tests/*.h)
 SAN_DIR := $(OBJDIR)/sanitize
 # ASan detects invalid memory access; UBSan checks undefined C behavior.
 # -g and frame pointers aid diagnostics; non-recovering failures stop the test.
@@ -147,6 +154,9 @@ $(SAN_DIR)/test_examples: tests/test_examples.c tests/example_general_driver.c s
 
 $(SAN_DIR)/test_test_helpers: tests/test_test_helpers.c tests/test_nist_aes256.c src/aes256.c $(HEADERS) | $(SAN_DIR)
 	$(CC) $(CPPFLAGS) $(SAN_FLAGS) -DNDEBUG $< src/aes256.c -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(SAN_DIR)/test_hash_io: tests/test_hash_io.c src/md5.c src/sha256.c src/sha3_256.c $(HEADERS) | $(SAN_DIR)
+	$(CC) $(CPPFLAGS) $(SAN_FLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
 $(SAN_DIR)/test_file_failures: tests/test_file_failures.c src/aes256.c $(HEADERS) | $(SAN_DIR)
 	$(CC) $(CPPFLAGS) $(SAN_FLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
@@ -185,3 +195,44 @@ fuzz: $(FUZZ_DIR)/aes_decrypt $(FUZZ_DIR)/seed $(FUZZ_DIR)/corpus
 
 fuzz-smoke: fuzz
 	$(FUZZ_DIR)/aes_decrypt -runs=$(FUZZ_RUNS) -max_len=4096 -artifact_prefix=$(FUZZ_DIR)/ $(FUZZ_DIR)/corpus
+
+# Static archives use the same position-independent objects as shared libraries.
+# AR and RANLIB are conventional toolchain overrides; no external crypto library
+# is linked into these archives or into the installed shared libraries.
+AR ?= ar
+RANLIB ?= ranlib
+STATIC_LIBRARIES := $(addprefix lib,$(addsuffix .a,$(ALGORITHMS)))
+.PHONY: shared static crosscheck install installcheck uninstall
+shared: $(LIBRARIES)
+static: $(STATIC_LIBRARIES) libcryptolib.a
+lib%.a: $(OBJDIR)/%.o
+	$(AR) rcs $@ $<
+	$(RANLIB) $@
+libcryptolib.a: $(addprefix $(OBJDIR)/,$(addsuffix .o,$(ALGORITHMS)))
+	$(AR) rcs $@ $^
+	$(RANLIB) $@
+
+PYTHON ?= python3
+OPENSSL ?= openssl
+crosscheck: shared
+	$(PYTHON) tests/crosscheck.py --openssl "$(OPENSSL)"
+
+# PREFIX is the final installation location; DESTDIR stages that layout beneath
+# another directory for packaging/testing without writing into the system prefix.
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include/cryptolib
+PUBLIC_HEADERS := cryptolib.h aes256.h arcfour.h md5.h sha256.h sha3.h
+install: shared static
+	install -d "$(DESTDIR)$(LIBDIR)" "$(DESTDIR)$(INCLUDEDIR)"
+	@set -e; for library in $(LIBRARIES); do install -m 755 "$$library" "$(DESTDIR)$(LIBDIR)/$$library"; done
+	@set -e; for library in $(STATIC_LIBRARIES) libcryptolib.a; do install -m 644 "$$library" "$(DESTDIR)$(LIBDIR)/$$library"; done
+	@set -e; for header in $(PUBLIC_HEADERS); do install -m 644 "include/$$header" "$(DESTDIR)$(INCLUDEDIR)/$$header"; done
+
+# Remove only this project's exact filenames; leave directories and other files.
+uninstall:
+	@set -e; for library in $(LIBRARIES) $(STATIC_LIBRARIES) libcryptolib.a; do rm -f "$(DESTDIR)$(LIBDIR)/$$library"; done
+	@set -e; for header in $(PUBLIC_HEADERS); do rm -f "$(DESTDIR)$(INCLUDEDIR)/$$header"; done
+
+installcheck: shared static
+	+$(PYTHON) tests/test_install.py --make "$(MAKE)" --cc "$(CC)"

@@ -52,3 +52,11 @@
 # Local OS/editor metadata. Already-tracked files are unaffected by ignore rules.
 .DS_Store
 /.vscode/
+
+# Standalone installed-library example executables.
+/examples/consumer/consumer
+/examples/consumer/consumer-shared
+__pycache__/
+
+/test_api
+/test_hash_io

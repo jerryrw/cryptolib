@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "cryptolib.h"
 
 // SHA-256 context structure
 typedef struct
@@ -22,15 +23,19 @@ typedef struct
     uint32_t state[8]; /* Eight 32-bit running words: 8 * 4 = 32 digest bytes. */
 } SHA256_CTX;
 
+/* Wipe a caller-owned context; NULL is accepted. Reinitialize before reuse. */
+void sha256_cleanup(SHA256_CTX *ctx);
+
 // Function prototypes
 void sha256_init(SHA256_CTX *ctx);
+/* A zero-length update permits NULL data and leaves the context unchanged. */
 void sha256_update(SHA256_CTX *ctx, const uint8_t *data, size_t len);
 void sha256_final(SHA256_CTX *ctx, uint8_t *hash);
 /* Compression consumes exactly one 64-byte block. Prefer update for normal
  * use because it handles incomplete input and length accounting for you. */
 void sha256_transform(SHA256_CTX *ctx, const uint8_t *data);
-/* Return 0 on success, -1 on I/O failure. The implementation opens/closes
- * the stream, prints I/O diagnostics on failure, and writes hash on success. */
+/* Return CRYPTOLIB_SUCCESS or a CRYPTOLIB_ERROR_* status. The implementation opens/closes
+ * the stream, does not print diagnostics, and writes hash only on success. */
 int sha256_file(const char *filepath, uint8_t *hash);
 
 #endif

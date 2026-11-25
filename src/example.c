@@ -50,11 +50,13 @@ int main(void)
     sha256_init(&sha);
     sha256_update(&sha, message, len);
     sha256_final(&sha, hash);
+    sha256_cleanup(&sha);
     print_hash("SHA-256", hash, 32);
     MD5_CTX md5;
     md5_init(&md5);
     md5_update(&md5, message, len);
     md5_final(&md5, hash);
+    md5_cleanup(&md5);
     print_hash("MD5 (legacy demonstration)", hash, 16);
 
 /* The key uses OS randomness. NULL in the IV position requests a separately
@@ -102,8 +104,7 @@ cleanup:
     aes256_secure_zero(decrypted, sizeof(decrypted));
     if (rc4_plain) aes256_secure_zero(rc4_plain, len);
     if (rc4_cipher) aes256_secure_zero(rc4_cipher, len);
-    if (rc4_enc) aes256_secure_zero(rc4_enc, sizeof(*rc4_enc));
-    if (rc4_dec) aes256_secure_zero(rc4_dec, sizeof(*rc4_dec));
+    /* rc4_free now wipes each context before releasing its allocation. */
     free(rc4_plain);
     free(rc4_cipher);
     rc4_free(rc4_enc);
