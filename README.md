@@ -4,7 +4,7 @@ Pure C implementations of AES-256, SHA-256, SHA3-256, MD5, and RC4, with no exte
 
 This is an educational project for myself to learn many things including makefiles and working with MacOS libraries.
 
-The project builds separate shared libraries, example programs, and tests. It is tested on macOS Apple Silicon; GitHub Actions is configured to check both macOS and Linux builds. Hosted CI results are available after pushing the changes.
+The project builds shared libraries, static archives, example programs, and tests. It is tested on macOS Apple Silicon; GitHub Actions is configured to check both macOS and Linux builds. Hosted CI results are available after pushing the changes.
 
 ## Features
 
@@ -28,8 +28,9 @@ operations, file streams, tests, and the build process. Inline comments througho
 ## Project Layout
 
 - `src/`: library implementations and example programs
-- `include/`: library headers and `example_helpers.h`, the examples’ shared random-byte helper
+- `include/`: public library headers and the development-only `example_helpers.h`
 - `tests/`: test vectors, regression and failure tests, and the AES fuzz harness
+- `examples/consumer/`: a standalone program that uses the installed library
 - `obj/`: generated objects, dependencies, sanitizer binaries, and fuzz artifacts
 - `.github/workflows/ci.yml`: macOS and Linux checks on pushes and pull requests
 - `Makefile`: build libraries, examples, and tests in the project root
@@ -45,12 +46,14 @@ operations, file streams, tests, and the build process. Inline comments througho
 ```bash
 make -j4                 # Build libraries, the general example, and run tests
 make example-aes         # Build the AES-specific example
-make aes256             # Build a single library
+make aes256             # Build a single shared library
+make static             # Build per-algorithm archives and libcryptolib.a
 make clean              # Remove generated objects, dependencies, libraries, and executables
 ```
 
 Shared libraries (`lib*.dylib` on macOS or `lib*.so` on Linux) and executables
 are written to the project root. Intermediate `.o` and `.d` files go in `obj/`.
+Static archives (`lib*.a`) also go in the root when requested.
 Header dependencies are tracked automatically. To disable machine-specific
 optimization, override the compiler flags:
 
@@ -101,7 +104,9 @@ The suite includes:
 5. Standalone compilation of every header in `include/`.
 6. Example randomness failures, unequal-length file comparisons, read errors,
    mismatch reporting, and failure exit statuses.
-7. Atomic output preservation under malformed input and injected open, read,
+7. Always-active test checks under `NDEBUG`, failure accounting in the AES
+   vector suite, and exact RC4 skipping counts.
+8. Atomic output preservation under malformed input and injected open, read,
    write, flush, sync, close, temporary-file, and rename failures.
 
 Run tests with:
@@ -115,15 +120,36 @@ make test
 ```bash
 make check              # Full test suite and both example programs
 make sanitize           # Tests and examples with ASan and UBSan
+make crosscheck         # Independent hashlib/OpenSSL comparisons
+make installcheck       # Staged install and external static/shared consumers
 ```
 
 Sanitizer binaries are built separately in `obj/sanitize/`; they do not change
 the normal build's compiler flags. Use `CC=clang` or `CC=gcc` to select a compiler
 with the sanitizer runtimes installed.
 
-GitHub Actions runs `make check` and `make sanitize` on macOS and Linux. The Linux
+GitHub Actions runs `make check`, `make sanitize`, `make crosscheck`, and
+`make installcheck` on macOS and Linux. The Linux
 job also runs the fuzz smoke test. These jobs run on pushes, pull requests, or a
-manual workflow dispatch.
+manual workflow dispatch. A separate release-flags step rebuilds and runs
+`make check` with `-DNDEBUG` to ensure test checks and setup remain active.
+
+### Independent Cross-Checks
+
+`make crosscheck` requires Python 3 with hashlib and an OpenSSL command-line
+executable. These are development dependencies only; the C libraries do not link
+to OpenSSL or require Python. Override tools as needed:
+
+```bash
+make crosscheck PYTHON=python3 OPENSSL=/path/to/openssl
+```
+
+The deterministic test set contains 46 binary messages, including empty input,
+embedded zeros, padding/block boundaries, and seeded random lengths. MD5, SHA-256,
+and SHA3-256 are checked against hashlib with whole-message, byte-at-a-time, and
+irregular streaming updates, plus file hashing. AES-CBC encryption and decryption
+are compared in both directions with OpenSSL, including IV-prefixed files.
+Missing or unsupported oracle tools fail the target rather than skipping checks.
 
 ### Fuzzing AES Decryption
 
@@ -156,6 +182,66 @@ MD5 and RC4 are included as legacy educational demonstrations.
 and a deterministic FIPS-197 block vector. Both programs check failures and
 return a nonzero exit status on error. Keys come from `/dev/urandom` and are
 cleared after use; the file example removes its private temporary directory.
+
+### RC4 Skip API
+
+Use `rc4_skip(ctx, count)` to discard exactly `count` bytes from a valid context.
+For example, `rc4_skip(ctx, 2048)` advances by 2,048 bytes and returns zero on
+success; a NULL context returns -1. A zero count leaves a valid context unchanged.
+This replaces the old `rc4_skip(counter, ctx)` macro; update callers to the new
+argument order and explicit count. Discarding bytes does not make RC4 suitable
+for production use.
+
+## Installing and Using the Library
+
+```bash
+make shared static
+make install PREFIX="$HOME/.local"
+make -C examples/consumer PREFIX="$HOME/.local"
+./examples/consumer/consumer
+make -C examples/consumer consumer-shared PREFIX="$HOME/.local"
+./examples/consumer/consumer-shared
+```
+
+`PREFIX` defaults to `/usr/local`. Public headers are installed under
+`PREFIX/include/cryptolib/`; include them as `<cryptolib/sha256.h>`, for example.
+Libraries go into `PREFIX/lib/`: the five shared libraries, five static archives,
+and a combined `libcryptolib.a`. The example's default build links that combined
+archive directly; its shared build supplies an explicit runtime search path.
+Example helpers and private implementation headers are not installed.
+
+`LIBDIR` and `INCLUDEDIR` override the library and namespaced-header destinations.
+`DESTDIR` stages the final prefix under another directory for packaging:
+
+```bash
+make install DESTDIR=/tmp/cryptolib-stage PREFIX=/usr/local
+make uninstall DESTDIR=/tmp/cryptolib-stage PREFIX=/usr/local
+```
+
+Uninstall uses the same prefix/directory settings and removes only this project's
+known filenames, leaving directories and unrelated files alone. `make installcheck`
+verifies this in a temporary staging tree (including paths with spaces), compiles
+and runs a consumer outside the checkout, and never installs to the real system.
+
+## API Consistency and Compatibility
+
+`cryptolib.h` defines shared `CRYPTOLIB_SUCCESS` and `CRYPTOLIB_ERROR_*` constants.
+The existing `AES_*` names alias those same numeric values. All three hash-file
+APIs now return specific invalid-parameter, open, or read/close errors and print
+no diagnostics. They leave output unchanged on failure. Existing callers checking
+zero versus nonzero continue to work; callers assuming every hash-file failure is
+exactly -1 should switch to the shared codes.
+
+RC4 key and input pointers are now `const`. The allocating compatibility APIs
+still return NULL on error. Prefer `rc4_init_checked` and `rc4_crypt_buffer` for
+caller-owned storage, explicit status codes, and output-capacity checks.
+
+`md5_cleanup`, `sha256_cleanup`, `sha3_256_cleanup`, and `rc4_cleanup` wipe contexts
+without freeing caller storage; NULL is a no-op. `rc4_free` now wipes before freeing
+heap storage. Reinitialize after cleanup. SHA3 also exposes `SHA3_256_CTX` and
+`sha3_256_init/update/final` alongside its existing one-shot API. Void streaming
+functions still require valid initialized contexts and buffers; they do not return
+argument-validation errors.
 
 ## Performance
 

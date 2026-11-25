@@ -4,3 +4,7 @@ _rc4_init
 _rc4_encrypt
 _rc4_byte
 _rc4_free
+_rc4_skip
+_rc4_init_checked
+_rc4_crypt_buffer
+_rc4_cleanup

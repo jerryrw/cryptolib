@@ -17,6 +17,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build, test, and run examples
         run: make -j2 check CC=clang
+      - name: Independent algorithm and installed consumer checks
+        run: make crosscheck installcheck CC=clang
+      - name: Tests stay active with NDEBUG
+        run: |
+          make clean
+          make -j2 check CC=clang CFLAGS="-std=c11 -Wall -O2 -DNDEBUG"
       - name: Address and undefined behavior sanitizers
         run: make sanitize CC=clang
       # Linux Clang supplies libFuzzer; the macOS job still runs ASan/UBSan.

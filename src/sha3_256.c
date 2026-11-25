@@ -21,6 +21,7 @@
  */
 
 #include "sha3.h"
+#include "cryptolib_internal.h"
 
 /* Keccak-f[1600] round constants */
 static const u64 keccakf_rndc[24] = {
@@ -97,18 +98,8 @@ static void keccakf(u64 state[25])
     }
 }
 
-/* SHA-3 context */
-typedef struct
-{
-    u64 state[25];   // 1600-bit state
-    u8 buffer[144];  // Input buffer (rate = 1088 bits = 136 bytes for SHA-3-256)
-    size_t buf_len;  // Current bytes in buffer
-    size_t rate;     // 136 for SHA-3-256
-    size_t hash_len; // 32 for SHA-3-256
-} sha3_256_ctx;
-
 /* Initialize SHA-3-256 context */
-void sha3_256_init(sha3_256_ctx *ctx)
+void sha3_256_init(SHA3_256_CTX *ctx)
 {
 /* sizeof(*ctx) is the size of the entire struct, not the size of its pointer.
  * memset fills those bytes with zero; the state and buffer both start empty. */
@@ -121,7 +112,7 @@ void sha3_256_init(sha3_256_ctx *ctx)
 /* take is the smaller of remaining input and unused block space. Pointer
  * arithmetic moves data forward by bytes because u8 is an 8-bit element type.
  * Retain an incomplete block across calls; permute only when it is full. */
-static void sha3_absorb(sha3_256_ctx *ctx, const u8 *data, size_t len)
+void sha3_256_update(SHA3_256_CTX *ctx, const u8 *data, size_t len)
 {
     while (len > 0)
     {
@@ -157,7 +148,7 @@ static void sha3_absorb(sha3_256_ctx *ctx, const u8 *data, size_t len)
 /* 0x06 contains the SHA3 domain-separation bits plus the first padding bit;
  * 0x80 adds the final padding bit. XOR handles both markers in one byte when
  * only one byte of rate space remains. These are SHA3 padding, not AES PKCS7. */
-static void sha3_final(sha3_256_ctx *ctx, u8 *out)
+void sha3_256_final(SHA3_256_CTX *ctx, u8 *out)
 {
     /* SHA-3 padding: "01" + zeros + "1" in the domain of 01 for SHA-3 */
     ctx->buffer[ctx->buf_len++] ^= 0x06; // Append 0110
@@ -182,10 +173,11 @@ static void sha3_final(sha3_256_ctx *ctx, u8 *out)
  * or ownership transfer occurs. Lengths describe binary data, not C strings. */
 void sha3_256(const u8 *input, size_t len, u8 hash[32])
 {
-    sha3_256_ctx ctx;
+    SHA3_256_CTX ctx;
     sha3_256_init(&ctx);
-    sha3_absorb(&ctx, input, len);
-    sha3_final(&ctx, hash);
+    sha3_256_update(&ctx, input, len);
+    sha3_256_final(&ctx, hash);
+    sha3_256_cleanup(&ctx);
 }
 
 /* Hash a string (null-terminated) */
@@ -199,31 +191,33 @@ void sha3_256_string(const char *str, u8 hash[32])
 /* Hash an entire file */
 /* Read fixed-size chunks so memory use does not grow with file size.
  * The 8192-byte I/O chunk need not match the 136-byte cryptographic block:
- * sha3_absorb retains partial blocks internally. Return 0 on success, -1 on error. */
+ * sha3_256_update retains partial blocks internally. Return shared status codes. */
 int sha3_256_file(const char *path, u8 hash[32])
 {
+    if (!path || !hash) return CRYPTOLIB_ERROR_INVALID_PARAM;
     FILE *f = fopen(path, "rb");
-    if (!f)
-        return -1;
-
-    sha3_256_ctx ctx;
+    if (!f) return CRYPTOLIB_ERROR_FILE_OPEN;
+    SHA3_256_CTX ctx;
     sha3_256_init(&ctx);
-
-    u8 buffer[8192];
+    u8 buffer[8192], digest[32];
     size_t n;
-
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0)
-        sha3_absorb(&ctx, buffer, n);
-
-    if (ferror(f))
-    {
-        fclose(f);
-        return -1;
+        sha3_256_update(&ctx, buffer, n);
+    int result = ferror(f) ? CRYPTOLIB_ERROR_FILE_READ : CRYPTOLIB_SUCCESS;
+    if (fclose(f) != 0) result = CRYPTOLIB_ERROR_FILE_READ;
+    if (result == CRYPTOLIB_SUCCESS) {
+        sha3_256_final(&ctx, digest);
+        memcpy(hash, digest, sizeof(digest));
     }
+    sha3_256_cleanup(&ctx);
+    cryptolib_wipe(buffer, sizeof(buffer));
+    cryptolib_wipe(digest, sizeof(digest));
+    return result;
+}
 
-    sha3_final(&ctx, hash);
-    fclose(f);
-    return 0;
+void sha3_256_cleanup(SHA3_256_CTX *ctx)
+{
+    cryptolib_wipe(ctx, sizeof(*ctx));
 }
 
 /* Utility: print hash in hex */

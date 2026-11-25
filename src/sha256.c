@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "sha256.h"
+#include "cryptolib_internal.h"
 
 // SHA-256 constants
 /* These 64 public constants are prescribed by SHA-256. static keeps the
@@ -185,46 +186,34 @@ void sha256_transform(SHA256_CTX *ctx, const uint8_t *data)
 /* FILE * is a C library stream handle, not the file contents. Read a
  * bounded number of bytes per iteration and hash only bytes_read, especially
  * on the short final read. The caller must provide at least 32 output bytes;
- * zero means success and -1 means an I/O failure. This function prints errors. */
+ * zero means success; failures return CRYPTOLIB_ERROR_* without printing. */
 int sha256_file(const char *filepath, uint8_t *hash)
 {
-    FILE *file;
+    if (!filepath || !hash) return CRYPTOLIB_ERROR_INVALID_PARAM;
+    FILE *file = fopen(filepath, "rb");
+    if (!file) return CRYPTOLIB_ERROR_FILE_OPEN;
     SHA256_CTX ctx;
-    uint8_t buffer[4096];
+    uint8_t buffer[4096], digest[32];
     size_t bytes_read;
-
-    // Open file
-    file = fopen(filepath, "rb");
-    if (!file)
-    {
-        perror("Error opening file");
-        return -1;
-    }
-
-    // Initialize SHA-256 context
     sha256_init(&ctx);
-
-    // Read and process file in chunks
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
-    {
         sha256_update(&ctx, buffer, bytes_read);
+    int result = ferror(file) ? CRYPTOLIB_ERROR_FILE_READ : CRYPTOLIB_SUCCESS;
+    /* Do not publish a digest on read/close failure. Close always executes. */
+    if (fclose(file) != 0) result = CRYPTOLIB_ERROR_FILE_READ;
+    if (result == CRYPTOLIB_SUCCESS) {
+        sha256_final(&ctx, digest);
+        memcpy(hash, digest, sizeof(digest));
     }
+    sha256_cleanup(&ctx);
+    cryptolib_wipe(buffer, sizeof(buffer));
+    cryptolib_wipe(digest, sizeof(digest));
+    return result;
+}
 
-    // Check for file read errors
-    if (ferror(file))
-    {
-        perror("Error reading file");
-        fclose(file);
-        return -1;
-    }
-
-    // Finalize hash
-    sha256_final(&ctx, hash);
-
-    // Close file
-    fclose(file);
-
-    return 0;
+void sha256_cleanup(SHA256_CTX *ctx)
+{
+    cryptolib_wipe(ctx, sizeof(*ctx));
 }
 
 /* See src/example.c for a complete, built example using this API. */

@@ -11,18 +11,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "cryptolib.h"
 
 /* Type definitions for RC4 */
 typedef unsigned char rc4_byte_t;
-
-/* Historical convenience macro: this actually discards 2049 bytes (0..2048).
- * x is a caller-supplied loop counter and y a context pointer. It expands to a
- * for statement, not a function. The volatile cast does not make the algorithm
- * secure; state changes, rather than the discarded return value, matter here. */
-// used to skip the first 2048 bytes of output for statistical purposes
-#define rc4_skip(x, y)         \
-    for (x = 0; x < 2049; x++) \
-        (volatile rc4_byte_t) rc4_byte(y); // explicitly tell compiler to not optimize
 
 /* RC4 context structure - maintains state between operations */
 typedef struct
@@ -35,15 +27,30 @@ typedef struct
 /* Function prototypes */
 /* key must point to at least size readable bytes, with size > 0.
  * Returns NULL for missing/empty key or allocation failure. Key bytes are read
- * but not modified; the current signature does not express that with const. */
-rc4_ctx *rc4_init(rc4_byte_t *key, size_t size);
+ * but not modified (expressed by const). */
+rc4_ctx *rc4_init(const rc4_byte_t *key, size_t size);
 /* Requires a valid initialized context; generates one byte and changes ctx. */
 rc4_byte_t rc4_byte(rc4_ctx *ctx);
+/* Discard exactly count keystream bytes. Returns 0 on success, -1 for NULL ctx.
+ * Zero count leaves a valid context unchanged. This replaces the historical
+ * rc4_skip(counter, ctx) macro; callers now use rc4_skip(ctx, 2048), for example.
+ * Both peers must discard the same count to retain matching stream positions. */
+int rc4_skip(rc4_ctx *ctx, size_t count);
 /* Read exactly size plaintext bytes; return size ciphertext bytes plus a
  * convenience zero terminator. The ciphertext is binary, so never use strlen
  * to recover its length. NULL plaintext is accepted only for size == 0.
  * Returns NULL for invalid input or allocation failure; does not change plaintext. */
-rc4_byte_t *rc4_encrypt(rc4_ctx *ctx, rc4_byte_t *plaintext, size_t size);
+rc4_byte_t *rc4_encrypt(rc4_ctx *ctx, const rc4_byte_t *plaintext, size_t size);
+/* Preferred allocation-free API. Integer returns use CRYPTOLIB_* statuses.
+ * init_checked initializes caller-owned storage. crypt_buffer checks capacity
+ * before writing or advancing the context. Exact in-place use is supported;
+ * partially overlapping buffers are not. For zero size, buffers may be NULL. */
+int rc4_init_checked(rc4_ctx *ctx, const rc4_byte_t *key, size_t keylen);
+int rc4_crypt_buffer(rc4_ctx *ctx, const rc4_byte_t *input, size_t size,
+                     rc4_byte_t *output, size_t output_capacity);
+/* Wipe but do not free caller-owned storage. Reinitialize before reuse. */
+void rc4_cleanup(rc4_ctx *ctx);
+/* Wipe and free a heap context returned by rc4_init; NULL is accepted. */
 void rc4_free(rc4_ctx *ctx);
 
 #endif /* ARCFOUR_H */

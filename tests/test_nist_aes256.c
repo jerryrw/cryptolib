@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+#define _DARWIN_C_SOURCE
 /*
  * Known-answer and round-trip tests for AES. A known-answer test compares to
  * published ciphertext; a round-trip tests that decrypt(encrypt(message)) matches
@@ -15,6 +17,7 @@
  */
 
 #include "aes256.h"
+#include "test_support.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -87,10 +90,11 @@ static void test_nist_ecb_vector(void)
     uint8_t decrypted[16];
 
     aes256_context ctx;
-    aes256_init(&ctx, key, NULL);
+    uint8_t iv[AES_BLOCK_SIZE] = {0};
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
 
     /* Test encryption */
-    aes256_encrypt_block(&ctx, plaintext, ciphertext);
+    CHECK(aes256_encrypt_block(&ctx, plaintext, ciphertext) == AES_SUCCESS);
 
     printf("Key:        ");
     aes256_print_hex(NULL, key, 32);
@@ -105,7 +109,7 @@ static void test_nist_ecb_vector(void)
     print_result("ECB Encryption", encrypt_pass);
 
     /* Test decryption */
-    aes256_decrypt_block(&ctx, ciphertext, decrypted);
+    CHECK(aes256_decrypt_block(&ctx, ciphertext, decrypted) == AES_SUCCESS);
 
     printf("Decrypted:  ");
     aes256_print_hex(NULL, decrypted, 16);
@@ -129,10 +133,11 @@ static void test_all_zeros(void)
     uint8_t decrypted[16];
 
     aes256_context ctx;
-    aes256_init(&ctx, key, NULL);
+    uint8_t iv[AES_BLOCK_SIZE] = {0};
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
 
-    aes256_encrypt_block(&ctx, plaintext, ciphertext);
-    aes256_decrypt_block(&ctx, ciphertext, decrypted);
+    CHECK(aes256_encrypt_block(&ctx, plaintext, ciphertext) == AES_SUCCESS);
+    CHECK(aes256_decrypt_block(&ctx, ciphertext, decrypted) == AES_SUCCESS);
 
     printf("Plaintext:  ");
     aes256_print_hex(NULL, plaintext, 16);
@@ -172,10 +177,10 @@ static void test_buffer_cbc(void)
 
     uint8_t encrypted[256];
     uint8_t decrypted[256];
-    size_t encrypted_len, decrypted_len;
+    size_t encrypted_len = 0, decrypted_len = 0;
 
     aes256_context ctx;
-    aes256_init(&ctx, key, iv);
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
 
     printf("Original message: %s\n", message);
     printf("Message length: %zu bytes\n", msg_len);
@@ -184,6 +189,7 @@ static void test_buffer_cbc(void)
     int ret = aes256_encrypt_buffer(&ctx, (uint8_t *)message, msg_len,
                                     encrypted, &encrypted_len);
 
+    CHECK(ret == AES_SUCCESS);
     printf("Encrypted length: %zu bytes\n", encrypted_len);
     printf("Encrypted data (first 32 bytes): ");
     aes256_print_hex(NULL, encrypted, encrypted_len > 32 ? 32 : encrypted_len);
@@ -195,6 +201,7 @@ static void test_buffer_cbc(void)
     ret |= aes256_decrypt_buffer(&ctx, encrypted, encrypted_len,
                                  decrypted, &decrypted_len);
 
+    CHECK(ret == AES_SUCCESS);
     decrypted[decrypted_len] = '\0'; /* Null-terminate */
     printf("Decrypted message: %s\n", (char *)decrypted);
     printf("Decrypted length: %zu bytes\n", decrypted_len);
@@ -235,7 +242,7 @@ static void test_large_buffer(void)
 
     if (!plaintext || !encrypted || !decrypted)
     {
-        printf(COLOR_RED "Memory allocation failed\n" COLOR_RESET);
+        print_result("Large buffer allocation", 0);
         free(plaintext);
         free(encrypted);
         free(decrypted);
@@ -249,14 +256,15 @@ static void test_large_buffer(void)
     }
 
     aes256_context ctx;
-    aes256_init(&ctx, key, iv);
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
 
-    size_t encrypted_len, decrypted_len;
+    size_t encrypted_len = 0, decrypted_len = 0;
 
     /* Encrypt */
     int ret = aes256_encrypt_buffer(&ctx, plaintext, buffer_size,
                                     encrypted, &encrypted_len);
 
+    CHECK(ret == AES_SUCCESS);
     printf("Original size: %zu bytes\n", buffer_size);
     printf("Encrypted size: %zu bytes\n", encrypted_len);
 
@@ -267,6 +275,7 @@ static void test_large_buffer(void)
     ret |= aes256_decrypt_buffer(&ctx, encrypted, encrypted_len,
                                  decrypted, &decrypted_len);
 
+    CHECK(ret == AES_SUCCESS);
     printf("Decrypted size: %zu bytes\n", decrypted_len);
 
     int pass = (ret == AES_SUCCESS) &&
@@ -288,105 +297,38 @@ static void test_large_buffer(void)
 /**
  * Test 5: File encryption/decryption
  */
-/* This older fixture creates fixed filenames in the working directory.
- * Use a disposable build checkout; the newer examples and regression fixtures
- * instead create private temporary directories. Return codes feed test results. */
+/* Private paths prevent clobbering files in the invoking working directory.
+ * Every error converges on cleanup and records a failed result exactly once. */
 static void test_file_operations(void)
 {
-    printf("\n=== Test 5: File Encryption/Decryption ===\n");
-
-    uint8_t key[32] = {
-        0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe,
-        0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
-        0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7,
-        0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4};
-
-    uint8_t iv[16] = {
-        0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
-        0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff};
-
-    const char *test_file = "test_input.txt";
-    const char *encrypted_file = "test_encrypted.bin";
-    const char *decrypted_file = "test_decrypted.txt";
-
-    /* Create test file */
-    FILE *f = fopen(test_file, "w");
-    if (!f)
-    {
-        printf(COLOR_RED "Failed to create test file\n" COLOR_RESET);
-        return;
-    }
-
-    const char *content = "This is a test file for AES-256 encryption.\n"
-                          "It contains multiple lines of text.\n"
-                          "The file encryption should handle this properly.\n"
-                          "Testing... 1, 2, 3!\n";
-
-    fprintf(f, "%s", content);
-    fclose(f);
-
-    aes256_context ctx;
-    aes256_init(&ctx, key, iv);
-
-    /* Encrypt file */
-    int ret = aes256_encrypt_file(&ctx, test_file, encrypted_file);
-    if (ret != AES_SUCCESS)
-    {
-        printf(COLOR_RED "File encryption failed with code %d\n" COLOR_RESET, ret);
-        return;
-    }
-
-    printf("File encrypted successfully\n");
-
-    /* Decrypt file */
-    ret = aes256_decrypt_file(&ctx, encrypted_file, decrypted_file);
-    if (ret != AES_SUCCESS)
-    {
-        printf(COLOR_RED "File decryption failed with code %d\n" COLOR_RESET, ret);
-        return;
-    }
-
-    printf("File decrypted successfully\n");
-
-    /* Compare original and decrypted */
-    FILE *f1 = fopen(test_file, "rb");
-    FILE *f2 = fopen(decrypted_file, "rb");
-
-    int match = 1;
-    if (f1 && f2)
-    {
-        int c1, c2;
-        while ((c1 = fgetc(f1)) != EOF && (c2 = fgetc(f2)) != EOF)
-        {
-            if (c1 != c2)
-            {
-                match = 0;
-                break;
-            }
-        }
-        if (fgetc(f1) != EOF || fgetc(f2) != EOF)
-        {
-            match = 0; /* Different lengths */
-        }
-    }
-    else
-    {
-        match = 0;
-    }
-
-    if (f1)
-        fclose(f1);
-    if (f2)
-        fclose(f2);
-
-    print_result("File round-trip", match);
-
-    /* Cleanup */
-    remove(test_file);
-    remove(encrypted_file);
-    remove(decrypted_file);
-
-    aes256_secure_zero(&ctx, sizeof(ctx));
+    test_fixture fixture = {0};
+    aes256_context ctx = {0};
+    uint8_t key[32] = {0}, iv[16] = {0};
+    FILE *writer = NULL, *left = NULL, *right = NULL;
+    int passed = 0;
+    const char content[] = "AES-256 file round-trip test.\nIncluding a final byte!";
+    if (test_fixture_init(&fixture) != 0) goto cleanup;
+    writer = fopen(fixture.input, "wb");
+    if (!writer) goto cleanup;
+    size_t written = fwrite(content, 1, sizeof(content) - 1, writer);
+    int closed = fclose(writer);
+    writer = NULL;
+    if (written != sizeof(content) - 1 || closed != 0) goto cleanup;
+    if (aes256_init(&ctx, key, iv) != AES_SUCCESS ||
+        aes256_encrypt_file(&ctx, fixture.input, fixture.encrypted) != AES_SUCCESS ||
+        aes256_decrypt_file(&ctx, fixture.encrypted, fixture.output) != AES_SUCCESS)
+        goto cleanup;
+    left = fopen(fixture.input, "rb");
+    right = fopen(fixture.output, "rb");
+    if (!left || !right) goto cleanup;
+    passed = test_files_equal(left, right);
+cleanup:
+    if (writer && fclose(writer) != 0) passed = 0;
+    if (left && fclose(left) != 0) passed = 0;
+    if (right && fclose(right) != 0) passed = 0;
+    aes256_cleanup(&ctx);
+    if (test_fixture_cleanup(&fixture) != 0) passed = 0;
+    print_result("File round-trip", passed);
 }
 
 /**
@@ -406,16 +348,16 @@ static void test_padding_edge_cases(void)
         iv[i] = (uint8_t)(16 - i);
 
     aes256_context ctx;
-    aes256_init(&ctx, key, iv);
+    CHECK(aes256_init(&ctx, key, iv) == AES_SUCCESS);
 
     /* Test exact block size (16 bytes) */
     uint8_t msg16[16] = "0123456789ABCDEF";
     uint8_t enc16[64], dec16[64];
     size_t enc16_len, dec16_len;
 
-    aes256_encrypt_buffer(&ctx, msg16, 16, enc16, &enc16_len);
+    CHECK(aes256_encrypt_buffer(&ctx, msg16, 16, enc16, &enc16_len) == AES_SUCCESS);
     memcpy(ctx.iv, iv, 16);
-    aes256_decrypt_buffer(&ctx, enc16, enc16_len, dec16, &dec16_len);
+    CHECK(aes256_decrypt_buffer(&ctx, enc16, enc16_len, dec16, &dec16_len) == AES_SUCCESS);
 
     int pass1 = (dec16_len == 16) && (memcmp(msg16, dec16, 16) == 0);
     print_result("16-byte message (exact block)", pass1);
@@ -426,9 +368,9 @@ static void test_padding_edge_cases(void)
     size_t enc15_len, dec15_len;
 
     memcpy(ctx.iv, iv, 16);
-    aes256_encrypt_buffer(&ctx, msg15, 15, enc15, &enc15_len);
+    CHECK(aes256_encrypt_buffer(&ctx, msg15, 15, enc15, &enc15_len) == AES_SUCCESS);
     memcpy(ctx.iv, iv, 16);
-    aes256_decrypt_buffer(&ctx, enc15, enc15_len, dec15, &dec15_len);
+    CHECK(aes256_decrypt_buffer(&ctx, enc15, enc15_len, dec15, &dec15_len) == AES_SUCCESS);
 
     int pass2 = (dec15_len == 15) && (memcmp(msg15, dec15, 15) == 0);
     print_result("15-byte message", pass2);
@@ -439,9 +381,9 @@ static void test_padding_edge_cases(void)
     size_t enc1_len, dec1_len;
 
     memcpy(ctx.iv, iv, 16);
-    aes256_encrypt_buffer(&ctx, msg1, 1, enc1, &enc1_len);
+    CHECK(aes256_encrypt_buffer(&ctx, msg1, 1, enc1, &enc1_len) == AES_SUCCESS);
     memcpy(ctx.iv, iv, 16);
-    aes256_decrypt_buffer(&ctx, enc1, enc1_len, dec1, &dec1_len);
+    CHECK(aes256_decrypt_buffer(&ctx, enc1, enc1_len, dec1, &dec1_len) == AES_SUCCESS);
 
     int pass3 = (dec1_len == 1) && (dec1[0] == 'X');
     print_result("1-byte message", pass3);

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "md5.h"
+#include "cryptolib_internal.h"
 
 // Bit manipulation macros
 /* These are preprocessor macros, expanded as source text before compilation.
@@ -71,6 +72,7 @@ void md5_init(MD5_CTX *context)
 // Update context with more data
 void md5_update(MD5_CTX *context, const uint8_t *input, size_t input_len)
 {
+    if (input_len == 0) return; /* Avoid pointer arithmetic on NULL for empty input. */
     size_t i, index, part_len;
 
     // Compute number of bytes mod 64
@@ -260,46 +262,34 @@ void md5_transform(MD5_CTX *context, const uint8_t block[64])
 /* Open in binary mode and read bounded chunks rather than loading the
  * whole file. fread returning zero can mean EOF or an error; ferror tells them
  * apart. The caller supplies at least 16 output bytes. No heap ownership is
- * transferred. This routine prints I/O diagnostics and returns -1 on failure. */
+ * transferred. Failures return CRYPTOLIB_ERROR_* without printing diagnostics. */
 int md5_file(const char *filepath, uint8_t *hash)
 {
-    FILE *file;
+    if (!filepath || !hash) return CRYPTOLIB_ERROR_INVALID_PARAM;
+    FILE *file = fopen(filepath, "rb");
+    if (!file) return CRYPTOLIB_ERROR_FILE_OPEN;
     MD5_CTX ctx;
-    uint8_t buffer[4096];
+    uint8_t buffer[4096], digest[16];
     size_t bytes_read;
-
-    // Open file
-    file = fopen(filepath, "rb");
-    if (!file)
-    {
-        perror("Error opening file");
-        return -1;
-    }
-
-    // Initialize MD5 context
     md5_init(&ctx);
-
-    // Read and process file in chunks
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0)
-    {
         md5_update(&ctx, buffer, bytes_read);
+    int result = ferror(file) ? CRYPTOLIB_ERROR_FILE_READ : CRYPTOLIB_SUCCESS;
+    /* Do not publish a digest on read/close failure. Close always executes. */
+    if (fclose(file) != 0) result = CRYPTOLIB_ERROR_FILE_READ;
+    if (result == CRYPTOLIB_SUCCESS) {
+        md5_final(&ctx, digest);
+        memcpy(hash, digest, sizeof(digest));
     }
+    md5_cleanup(&ctx);
+    cryptolib_wipe(buffer, sizeof(buffer));
+    cryptolib_wipe(digest, sizeof(digest));
+    return result;
+}
 
-    // Check for file read errors
-    if (ferror(file))
-    {
-        perror("Error reading file");
-        fclose(file);
-        return -1;
-    }
-
-    // Finalize hash
-    md5_final(&ctx, hash);
-
-    // Close file
-    fclose(file);
-
-    return 0;
+void md5_cleanup(MD5_CTX *ctx)
+{
+    cryptolib_wipe(ctx, sizeof(*ctx));
 }
 
 /* See src/example.c for a complete, built example using this API. */

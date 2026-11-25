@@ -2,3 +2,4 @@ _md5_init
 _md5_update
 _md5_final
 _md5_file
+_md5_cleanup

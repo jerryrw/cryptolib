@@ -3,12 +3,12 @@
  * Wrappers below replace selected calls only while including the example source.
  * The real library remains linked normally. Macros act as compile-time name
  * substitution; failure flags choose behavior at runtime. No production code is
- * modified to enable injection. assert failures abort the test; do not set NDEBUG.
+ * modified to enable injection. CHECK failures terminate the test even when NDEBUG is set.
  */
 
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
-#include <assert.h>
+#include "test_support.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -101,22 +101,22 @@ static void test_comparison(void)
     const char *a[] = {"", "a", "ab", "ab", "ab", ""};
     const char *b[] = {"", "", "a", "ab", "abc", "a"};
     for (size_t i = 0; i < 6; i++) {
-        FILE *left = tmpfile(), *right = tmpfile(); assert(left && right);
-        assert(fputs(a[i], left) >= 0 && fputs(b[i], right) >= 0);
+        FILE *left = tmpfile(), *right = tmpfile(); CHECK(left && right);
+        CHECK(fputs(a[i], left) >= 0 && fputs(b[i], right) >= 0);
         rewind(left); rewind(right);
-        assert(files_match(left, right) == (strcmp(a[i], b[i]) == 0));
-        assert(fclose(left) == 0 && fclose(right) == 0);
+        CHECK(files_match(left, right) == (strcmp(a[i], b[i]) == 0));
+        CHECK(fclose(left) == 0 && fclose(right) == 0);
     }
-    FILE *left = tmpfile(), *right = tmpfile(); assert(left && right);
+    FILE *left = tmpfile(), *right = tmpfile(); CHECK(left && right);
 /* Deliberately invalidate one underlying descriptor to force a read error.
  * The stream still needs fclose for its C-library resources; close and fclose
  * are different layers of ownership, normally managed together by fclose. */
     int fd = fileno(left);
-    assert(close(fd) == 0);
-    assert(!files_match(left, right));
-    assert(ferror(left));
+    CHECK(close(fd) == 0);
+    CHECK(!files_match(left, right));
+    CHECK(ferror(left));
     fclose(left); /* The intentionally closed descriptor makes fclose fail. */
-    assert(fclose(right) == 0);
+    CHECK(fclose(right) == 0);
 }
 
 /* Inspect the entry point status and captured output on failure. */
@@ -125,23 +125,23 @@ static void test_comparison(void)
  * checking results. fflush prevents buffered output from crossing redirects. */
 static void check_failure_status(int (*entry)(void), const char *success)
 {
-    FILE *capture = tmpfile(); assert(capture);
-    assert(fflush(stdout) == 0);
-    int saved = dup(STDOUT_FILENO); assert(saved >= 0);
-    assert(dup2(fileno(capture), STDOUT_FILENO) >= 0);
+    FILE *capture = tmpfile(); CHECK(capture);
+    CHECK(fflush(stdout) == 0);
+    int saved = dup(STDOUT_FILENO); CHECK(saved >= 0);
+    CHECK(dup2(fileno(capture), STDOUT_FILENO) >= 0);
     int result = entry();
-    assert(fflush(stdout) == 0);
-    assert(dup2(saved, STDOUT_FILENO) >= 0);
-    assert(close(saved) == 0);
-    assert(result == EXIT_FAILURE);
+    CHECK(fflush(stdout) == 0);
+    CHECK(dup2(saved, STDOUT_FILENO) >= 0);
+    CHECK(close(saved) == 0);
+    CHECK(result == EXIT_FAILURE);
     rewind(capture);
 /* Leave one byte for a zero terminator so strstr can search safely. The
  * zero initializer supplies it even though fread does not terminate text. */
     char output[4096] = {0};
     size_t n = fread(output, 1, sizeof(output) - 1, capture);
-    assert(n < sizeof(output) - 1 && !ferror(capture));
-    assert(strstr(output, success) == NULL);
-    assert(fclose(capture) == 0);
+    CHECK(n < sizeof(output) - 1 && !ferror(capture));
+    CHECK(strstr(output, success) == NULL);
+    CHECK(fclose(capture) == 0);
 }
 
 int main(void)
@@ -149,21 +149,21 @@ int main(void)
     test_comparison();
     uint8_t key[32];
     fail_random = 1;
-    assert(example_random_bytes(key, sizeof(key)) != 0);
+    CHECK(example_random_bytes(key, sizeof(key)) != 0);
     check_failure_status(aes_example_main, "All AES examples completed successfully");
-    assert(example_file() == -1);
-    assert(temporary_dir[0] && access(temporary_dir, F_OK) != 0);
+    CHECK(example_file() == -1);
+    CHECK(temporary_dir[0] && access(temporary_dir, F_OK) != 0);
     fail_random = 0;
     corrupt_plaintext = 1;
     check_failure_status(aes_example_main, "All AES examples completed successfully");
     corrupt_plaintext = 0;
-    assert(example_buffer("overflow", SIZE_MAX) == -1);
+    CHECK(example_buffer("overflow", SIZE_MAX) == -1);
     fail_short_read = 1;
-    assert(example_random_bytes(key, sizeof(key)) != 0);
+    CHECK(example_random_bytes(key, sizeof(key)) != 0);
     fail_short_read = 0; fail_read_error = 1;
-    assert(example_random_bytes(key, sizeof(key)) != 0);
+    CHECK(example_random_bytes(key, sizeof(key)) != 0);
     fail_read_error = 0; fail_close = 1;
-    assert(example_random_bytes(key, sizeof(key)) != 0);
+    CHECK(example_random_bytes(key, sizeof(key)) != 0);
     fail_close = 0;
     general_example_set_random_failure(1);
     check_failure_status(general_example_main, "AES-256 CBC round-trip passed");

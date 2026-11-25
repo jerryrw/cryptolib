@@ -7,3 +7,7 @@ _sha3_256_file
 _sha3_256_print
 #/* High-level: hash a buffer */
 _sha3_256
+_sha3_256_init
+_sha3_256_update
+_sha3_256_final
+_sha3_256_cleanup

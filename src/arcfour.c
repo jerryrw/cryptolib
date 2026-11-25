@@ -7,6 +7,7 @@
  */
 
 #include "arcfour.h"
+#include "cryptolib_internal.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,56 +20,34 @@
  * rc4_init - Initialize RC4 context with a key
  * Key Scheduling Algorithm (KSA)
  */
-rc4_ctx *rc4_init(rc4_byte_t *key, size_t keylen)
+rc4_ctx *rc4_init(const rc4_byte_t *key, size_t keylen)
 {
-    unsigned int i, j;
-    rc4_byte_t temp;
-    rc4_ctx *ctx;
-
-    if (!key || keylen == 0)
-        return NULL;
-
-/* malloc allocates heap storage that outlives this function. sizeof(rc4_ctx)
- * is the number of bytes needed for the struct. NULL means allocation failed;
- * the caller owns a successful result and must eventually call rc4_free. */
-    ctx = (rc4_ctx *)malloc(sizeof(rc4_ctx));
-    if (ctx == NULL)
-    {
+    if (!key || keylen == 0) return NULL;
+    rc4_ctx *ctx = malloc(sizeof(*ctx));
+    if (!ctx) return NULL;
+    if (rc4_init_checked(ctx, key, keylen) != CRYPTOLIB_SUCCESS) {
+        free(ctx);
         return NULL;
     }
+    return ctx;
+}
 
-    /* Initialize S-box */
-    for (i = 0; i < 256; i++)
-    {
-        ctx->S[i] = (rc4_byte_t)i;
-    }
-
-    /* KSA main loop */
-    j = 0;
-    for (i = 0; i < 256; i++)
-    {
-/* i % keylen cycles through the key bytes. The earlier zero-length check
- * prevents division by zero. % 256 keeps the permutation index in 0..255. */
+/* The checked initializer supports stack contexts without any allocation. */
+int rc4_init_checked(rc4_ctx *ctx, const rc4_byte_t *key, size_t keylen)
+{
+    if (!ctx || !key || keylen == 0) return CRYPTOLIB_ERROR_INVALID_PARAM;
+    /* Start with every byte value exactly once, then permute using the key. */
+    for (unsigned int i = 0; i < 256; i++) ctx->S[i] = (rc4_byte_t)i;
+    unsigned int j = 0;
+    for (unsigned int i = 0; i < 256; i++) {
+        /* Modulo cycles over key bytes and keeps j inside the 256-byte table. */
         j = (j + ctx->S[i] + key[i % keylen]) % 256;
-
-        /* Swap S[i] and S[j] */
-        temp = ctx->S[i];
+        rc4_byte_t temp = ctx->S[i];
         ctx->S[i] = ctx->S[j];
         ctx->S[j] = temp;
     }
-
-    /* Initialize PRGA indices */
-    ctx->i = 0;
-    ctx->j = 0;
-
-/* The disabled discard loop below changes the stream position. The RFC
- * test vectors start at byte zero; discarding bytes requires both peers to
- * advance by exactly the same count. The current loop would discard 2049 bytes. */
-    // this works for use but does not pass one test due to the nature of the test
-    // for (int x = 0; x < 2049; x++)
-    //     (volatile rc4_byte_t) rc4_byte(ctx); // explicitly tell compiler to not optimize
-
-    return ctx;
+    ctx->i = ctx->j = 0;
+    return CRYPTOLIB_SUCCESS;
 }
 
 /*
@@ -99,47 +78,58 @@ rc4_byte_t rc4_byte(rc4_ctx *ctx)
     return ctx->S[t];
 }
 
+/* A real function evaluates caller arguments once and is safe in if/else.
+ * Count down rather than using i <= count, which could wrap at SIZE_MAX. */
+int rc4_skip(rc4_ctx *ctx, size_t count)
+{
+    if (!ctx) return CRYPTOLIB_ERROR_INVALID_PARAM;
+    while (count != 0) {
+        (void)rc4_byte(ctx);
+        count--;
+    }
+    return CRYPTOLIB_SUCCESS;
+}
+
 /*
  * rc4_encrypt - Encrypt data with RC4
  */
-rc4_byte_t *rc4_encrypt(rc4_ctx *ctx, rc4_byte_t *plaintext, size_t size)
+rc4_byte_t *rc4_encrypt(rc4_ctx *ctx, const rc4_byte_t *plaintext, size_t size)
 {
-    size_t x;
-    rc4_byte_t *ciphertext;
-
-    if (!ctx || (!plaintext && size != 0) || size == SIZE_MAX)
-        return NULL;
-
-/* Reserve an extra byte for a convenience zero terminator. Ciphertext is
- * still binary: zeros can appear anywhere, so use size, never strlen. Reject
- * SIZE_MAX above because adding one would wrap to a too-small allocation. */
-    ciphertext = (rc4_byte_t *)malloc(size + 1);
-    if (ciphertext == NULL)
-    {
+    if (!ctx || (!plaintext && size != 0) || size == SIZE_MAX) return NULL;
+    rc4_byte_t *ciphertext = malloc(size + 1);
+    if (!ciphertext) return NULL;
+    if (rc4_crypt_buffer(ctx, plaintext, size, ciphertext, size) != CRYPTOLIB_SUCCESS) {
+        free(ciphertext);
         return NULL;
     }
-
-    for (x = 0; x < size; x++)
-    {
-/* XOR is its own inverse: (message XOR stream) XOR stream = message.
- * rc4_byte advances ctx, so reuse of a consumed context changes the stream. */
-        ciphertext[x] = plaintext[x] ^ rc4_byte(ctx);
-    }
-
-    ciphertext[size] = '\0';
+    ciphertext[size] = '\0'; /* Convenience only: ciphertext is binary. */
     return ciphertext;
+}
+
+int rc4_crypt_buffer(rc4_ctx *ctx, const rc4_byte_t *input, size_t size,
+                     rc4_byte_t *output, size_t output_capacity)
+{
+    if (!ctx || (size && (!input || !output))) return CRYPTOLIB_ERROR_INVALID_PARAM;
+    if (output_capacity < size) return CRYPTOLIB_ERROR_BUFFER_TOO_SMALL;
+    /* XOR is its own inverse; each call consumes the next keystream byte.
+     * Check everything first so rejected calls cannot change stream position. */
+    for (size_t i = 0; i < size; i++) output[i] = input[i] ^ rc4_byte(ctx);
+    return CRYPTOLIB_SUCCESS;
+}
+
+void rc4_cleanup(rc4_ctx *ctx)
+{
+    cryptolib_wipe(ctx, sizeof(*ctx));
 }
 
 /*
  * rc4_free - Free RC4 context
  */
-/* This releases the context allocation; it does not erase its contents.
- * A caller that wants to wipe it must do so before freeing it. The separately
- * allocated ciphertext from rc4_encrypt must be freed by the caller as well. */
+/* Free only contexts created by rc4_init. Wipe before releasing the storage. */
 void rc4_free(rc4_ctx *ctx)
 {
-    if (ctx != NULL)
-    {
+    if (ctx) {
+        rc4_cleanup(ctx);
         free(ctx);
     }
 }

@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "cryptolib.h"
 
 // MD5 context structure
 typedef struct
@@ -21,9 +22,12 @@ typedef struct
     uint8_t buffer[64]; /* An unfinished 64-byte compression block. */
 } MD5_CTX;
 
+/* Wipe a caller-owned context; NULL is accepted. Reinitialize before reuse. */
+void md5_cleanup(MD5_CTX *ctx);
+
 // Function prototypes
 void md5_init(MD5_CTX *context);
-/* input_len counts bytes, including embedded zeros. const means the function
+/* input_len counts bytes, including embedded zeros. Zero length permits NULL input. const means the function
  * may read input but must not modify its bytes through this pointer. */
 void md5_update(MD5_CTX *context, const uint8_t *input, size_t input_len);
 void md5_final(MD5_CTX *context, uint8_t digest[16]);
@@ -31,7 +35,8 @@ void md5_final(MD5_CTX *context, uint8_t digest[16]);
  * update, which assembles whole blocks and maintains the message-length counter. */
 void md5_transform(MD5_CTX *context, const uint8_t block[64]);
 /* Open a path, hash the file, and close it internally. Return 0 on success
- * or -1 on an I/O error. The caller supplies the 16-byte output allocation. */
+ * or a CRYPTOLIB_ERROR_* status on failure. The caller supplies 16 output bytes.
+ * No diagnostics are printed; output is unchanged on failure. */
 int md5_file(const char *filepath, uint8_t *hash);
 
 #endif
